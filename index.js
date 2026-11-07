@@ -13,6 +13,8 @@ const fs = require('fs');
 const path = require('path');
 const config = require('./config');
 const { makeSticker, stickerToImage } = require('./src/sticker');
+const { makeBratSticker, makeBratVideoSticker } = require('./src/brat');
+
 const { upscaleImage } = require('./src/hd');
 const {
   askAI,
@@ -409,6 +411,8 @@ async function startBot() {
               `_Prefix Bot: "${config.prefix}"_\n\n` +
               `🎨 *MEDIA & AI*\n` +
               `• *${config.prefix}s* : Bikin foto jadi stiker WA\n` +
+              `• *${config.prefix}brat <teks>* : Stiker teks Brat putih\n` +
+              `• *${config.prefix}bratvid <teks>* : Stiker video Brat (animasi kata demi kata)\n` +
               `• *${config.prefix}toimg* : Reply stiker jadi foto kembali\n` +
               `• *${config.prefix}hd* : Tingkatkan kualitas foto ke HD\n` +
               `• *${config.prefix}ai <tanya>* : Tanya AI (Mendukung memori percakapan)\n` +
@@ -451,6 +455,74 @@ async function startBot() {
           }
 
           // ------------------ MEDIA & AI ------------------
+          
+          // ------------------ FITUR BRAT STICKER (PUTIH) ------------------
+          case 'brat':
+          case 'bratwhite': {
+            const targetText = args.join(' ').trim();
+            if (!targetText) {
+              await sock.sendMessage(
+                sender,
+                { text: `⚠️ Masukkan kalimat untuk stiker Brat (atau reply pesan teks).\nContoh: *${config.prefix}brat malas banget hari ini*` },
+                { quoted: msg }
+              );
+              break;
+            }
+
+            if (targetText.length > 250) {
+              await sock.sendMessage(
+                sender,
+                { text: '⚠️ Teks terlalu panjang, maksimal 250 karakter.' },
+                { quoted: msg }
+              );
+              break;
+            }
+
+            try {
+              const stickerWebp = await makeBratSticker(targetText, 'white');
+              await sock.sendMessage(sender, { sticker: stickerWebp }, { quoted: msg });
+            } catch (err) {
+              console.error('[Brat Error]:', err.message);
+              await sock.sendMessage(sender, { text: '❌ Gagal membuat stiker Brat: ' + err.message }, { quoted: msg });
+            }
+            break;
+          }
+
+          case 'bratvid':
+          case 'bratvideo':
+          case 'bratgif':
+          case 'bratv': {
+            const targetText = args.join(' ').trim();
+            if (!targetText) {
+              await sock.sendMessage(
+                sender,
+                { text: `⚠️ Masukkan kalimat untuk stiker video Brat (atau reply pesan teks).\nContoh: *${config.prefix}bratvid kamu nanya kenapa aku malas*` },
+                { quoted: msg }
+              );
+              break;
+            }
+
+            if (targetText.length > 200) {
+              await sock.sendMessage(
+                sender,
+                { text: '⚠️ Teks terlalu panjang untuk stiker video, maksimal 200 karakter.' },
+                { quoted: msg }
+              );
+              break;
+            }
+
+            await sock.sendMessage(sender, { text: '⏳ Sedang membuat stiker video Brat (animasi kata demi kata)...' }, { quoted: msg });
+
+            try {
+              const animWebp = await makeBratVideoSticker(targetText, 'white');
+              await sock.sendMessage(sender, { sticker: animWebp }, { quoted: msg });
+            } catch (err) {
+              console.error('[Brat Video Error]:', err.message);
+              await sock.sendMessage(sender, { text: '❌ Gagal membuat stiker video Brat: ' + err.message }, { quoted: msg });
+            }
+            break;
+          }
+
           case 's':
           case 'sticker': {
             let targetImage = null;
