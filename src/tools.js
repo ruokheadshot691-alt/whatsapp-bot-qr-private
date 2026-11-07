@@ -1,126 +1,193 @@
 const crypto = require('crypto');
 
 /**
- * Tanya AI dengan Dukungan Memori Percakapan (Multi-turn Chat)
- * @param {string} prompt - Pertanyaan saat ini
- * @param {Array<{role: string, content: string}>} history - Riwayat percakapan sebelumnya
- * @param {string} userId - ID pengirim untuk sesi AI
+ * Tanya AI dengan memori dan persona khusus per pengguna.
+ * Provider gratis bisa berubah sewaktu-waktu, jadi fungsi ini mencoba dua engine.
  */
-async function askAI(prompt, history = [], userId = 'default') {
-  // Engine 1: FreeAIOnline (GPT-4o engine dengan multi-turn messages native)
-  try {
-    const sRes = await fetch('https://free-ai-online.com/wp-json/mwai/v1/start_session', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ botId: 'default' }),
-      signal: AbortSignal.timeout(8000)
-    });
+function looksLikeChinese(text) {
+  const chars = (String(text).match(/[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]/g) || []).length;
+  return chars >= 4 && chars / Math.max(String(text).length, 1) > 0.08;
+}
 
-    if (sRes.ok) {
-      const { restNonce } = await sRes.json();
-      const mwaiMessages = history.map((m, idx) => ({
-        id: m.id || ('msg_' + idx),
-        role: m.role,
-        content: m.content
-      }));
+function aiSystemPrompt(persona = '') {
+  const selectedPersona = String(persona || '').trim();
+  return [
+    'Kamu adalah asisten WhatsApp yang membantu, aman, dan mengikuti instruksi pengguna.',
+    'Balas selalu dalam Bahasa Indonesia, kecuali pengguna secara jelas meminta bahasa lain atau sedang meminta terjemahan.',
+    'Jangan pernah menjawab dalam Bahasa Mandarin/Tionghoa kecuali pengguna meminta bahasa itu secara eksplisit.',
+    selectedPersona ? `Persona yang harus kamu perankan secara konsisten: ${selectedPersona}` : ''
+  ].filter(Boolean).join('\n');
+}
 
-      const cRes = await fetch('https://free-ai-online.com/wp-json/mwai-ui/v1/chats/submit', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-WP-Nonce': restNonce
-        },
-        body: JSON.stringify({
-          botId: 'default',
-          chatId: 'wa_' + String(userId).replace(/[^a-zA-Z0-9]/g, '_'),
-          messages: mwaiMessages,
-          newMessage: prompt
-        }),
-        signal: AbortSignal.timeout(25000)
-      });
-
-      if (cRes.ok) {
-        const data = await cRes.json();
-        if (data && data.reply && data.reply.trim()) {
-          return data.reply.trim();
-        }
-      }
+async function askUnlimited(prompt, history, persona) {
+  const messages = [
+    { role: 'system', content: aiSystemPrompt(persona) },
+    ...history.filter((m) => ['user', 'assistant'].includes(m.role)).map((m) => ({ role: m.role, content: String(m.content) })),
+    { role: 'user', content: prompt }
+  ];
+  const res = await fetch('https://app.unlimitedai.chat/api/chat', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    },
+    body: JSON.stringify({
+      chatId: crypto.randomUUID(),
+      messages: messages.map((m) => ({
+        ...m,
+        id: crypto.randomUUID(),
+        parts: [{ type: 'text', text: m.content }],
+        createdAt: new Date().toISOString()
+      })),
+      selectedChatModel: 'chat-model-general',
+      selectedCharacter: null,
+      selectedStory: null,
+      deviceId: crypto.randomUUID(),
+      locale: 'id'
+    }),
+    signal: AbortSignal.timeout(22000)
+  });
+  if (!res.ok) throw new Error(`AI utama merespons HTTP ${res.status}`);
+  const raw = await res.text();
+  let reply = '';
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const part = JSON.parse(trimmed);
+      if (part.type === 'delta' && part.delta) reply += part.delta;
+      else if (part.type === 'text-delta' && part.textDelta) reply += part.textDelta;
+      else if (part.type === 'error' && part.error) throw new Error(String(part.error));
+    } catch (err) {
+      if (err instanceof SyntaxError) continue;
+      throw err;
     }
+  }
+  if (!reply.trim()) throw new Error('AI utama tidak mengirim jawaban');
+  return reply.trim();
+}
+
+async function askFreeAI(prompt, history, userId, persona) {
+  const sRes = await fetch('https://free-ai-online.com/wp-json/mwai/v1/start_session', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ botId: 'default' }),
+    signal: AbortSignal.timeout(8000)
+  });
+  if (!sRes.ok) throw new Error(`AI cadangan gagal membuka sesi (HTTP ${sRes.status})`);
+  const { restNonce } = await sRes.json();
+  if (!restNonce) throw new Error('AI cadangan tidak mengirim token sesi');
+  const messages = [
+    { id: 'system_instruction', role: 'system', content: aiSystemPrompt(persona) },
+    ...history.map((m, idx) => ({ id: m.id || `msg_${idx}`, role: m.role, content: m.content }))
+  ];
+  const cRes = await fetch('https://free-ai-online.com/wp-json/mwai-ui/v1/chats/submit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-WP-Nonce': restNonce },
+    body: JSON.stringify({
+      botId: 'default',
+      chatId: 'wa_' + String(userId).replace(/[^a-zA-Z0-9]/g, '_'),
+      messages,
+      newMessage: prompt
+    }),
+    signal: AbortSignal.timeout(25000)
+  });
+  if (!cRes.ok) throw new Error(`AI cadangan merespons HTTP ${cRes.status}`);
+  const data = await cRes.json();
+  if (!data?.reply?.trim()) throw new Error('AI cadangan tidak mengirim jawaban');
+  return data.reply.trim();
+}
+
+async function askAI(prompt, history = [], userId = 'default', persona = '') {
+  const errors = [];
+  // Engine ini menghormati system prompt, termasuk Bahasa Indonesia dan persona.
+  try {
+    let answer = await askUnlimited(prompt, history, persona);
+    if (looksLikeChinese(answer)) {
+      answer = await askUnlimited(
+        `Jawab ulang pertanyaan berikut hanya dalam Bahasa Indonesia. Jangan gunakan aksara Mandarin/Tionghoa. Pertanyaan: ${prompt}`,
+        history,
+        persona
+      );
+    }
+    if (looksLikeChinese(answer)) throw new Error('AI mengirim jawaban dalam bahasa yang tidak sesuai');
+    return answer;
   } catch (err) {
-    console.warn('[AI Engine 1 Gagal, beralih ke Engine 2]:', err.message);
+    errors.push(err.message);
+    console.warn('[AI utama gagal, mencoba AI cadangan]:', err.message);
   }
 
-  // Engine 2: UnlimitedAI (General model dengan context injection)
   try {
-    let fullPrompt = prompt;
-    if (history.length > 0) {
-      const historyText = history
-        .map((m) => (m.role === 'user' ? 'User: ' : 'AI: ') + m.content)
-        .join('\n');
-      fullPrompt = `Berikut adalah percakapan kita sebelumnya:\n${historyText}\n\nUser: ${prompt}\nAI:`;
-    }
-
-    const res = await fetch('https://app.unlimitedai.chat/api/chat', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      },
-      body: JSON.stringify({
-        chatId: crypto.randomUUID(),
-        messages: [
-          {
-            id: crypto.randomUUID(),
-            role: 'user',
-            content: fullPrompt,
-            parts: [{ type: 'text', text: fullPrompt }],
-            createdAt: new Date().toISOString()
-          }
-        ],
-        selectedChatModel: 'chat-model-general',
-        selectedCharacter: null,
-        selectedStory: null,
-        deviceId: crypto.randomUUID(),
-        locale: 'id'
-      }),
-      signal: AbortSignal.timeout(20000)
-    });
-
-    if (res.ok) {
-      const text = await res.text();
-      let reply = '';
-      for (const line of text.split('\n')) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        try {
-          const p = JSON.parse(trimmed);
-          if (p.type === 'delta' && p.delta) reply += p.delta;
-        } catch {}
-      }
-      if (reply.trim()) return reply.trim();
-    }
-  } catch (err2) {
-    console.error('[AI Engine 2 Gagal]:', err2.message);
+    const answer = await askFreeAI(prompt, history, userId, persona);
+    if (looksLikeChinese(answer)) throw new Error('AI cadangan mengirim jawaban dalam bahasa yang tidak sesuai');
+    return answer;
+  } catch (err) {
+    errors.push(err.message);
+    console.warn('[AI cadangan juga gagal]:', err.message);
   }
-
-  throw new Error('Server AI sedang padat, silakan coba kirim ulang dalam beberapa detik.');
+  throw new Error('AI sedang tidak bisa diakses. Coba lagi beberapa saat; cek koneksi dan kuota layanan gratis.');
 }
 
 /**
- * Terjemahan Bahasa (Google Translate Free Endpoint)
+ * Terjemahan: MyMemory terlebih dahulu (pakai autodetect, bukan kode sumber auto),
+ * lalu Google Translate GTX. Memeriksa content-type/status agar HTML error tidak
+ * berubah menjadi pesan JSON parse yang membingungkan.
  */
 async function translateText(text, targetLang = 'id') {
-  try {
-    const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${encodeURIComponent(targetLang)}&dt=t&q=${encodeURIComponent(text)}`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
-    const data = await res.json();
-    if (data && data[0]) {
-      return data[0].map((item) => item[0]).join('');
-    }
-    throw new Error('Format respon translate tidak sesuai');
-  } catch (err) {
-    throw new Error('Gagal translate: ' + err.message);
+  const langMap = {
+    jp: 'ja', japan: 'ja', jepang: 'ja',
+    eng: 'en', english: 'en', inggris: 'en',
+    indo: 'id', indonesia: 'id',
+    kr: 'ko', korea: 'ko', korean: 'ko',
+    cn: 'zh-CN', zh: 'zh-CN', china: 'zh-CN', mandarin: 'zh-CN',
+    arab: 'ar', arabic: 'ar',
+    german: 'de', jerman: 'de', french: 'fr', prancis: 'fr',
+    spanish: 'es', spanyol: 'es', russian: 'ru', rusia: 'ru'
+  };
+  const input = String(text || '').trim();
+  if (!input) throw new Error('Masukkan teks yang ingin diterjemahkan.');
+  const requested = String(targetLang || 'id').trim().toLowerCase();
+  const target = langMap[requested] || requested;
+  if (!/^[a-z]{2,3}(?:-[a-z0-9]{2,8})?$/i.test(target)) {
+    throw new Error(`Kode bahasa tidak valid: ${targetLang}`);
   }
+  const failures = [];
+
+  // MyMemory uses "autodetect" as the source-language code.
+  try {
+    const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(input)}&langpair=${encodeURIComponent(`autodetect|${target}`)}`;
+    const res = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10000) });
+    const contentType = res.headers.get('content-type') || '';
+    if (!res.ok) throw new Error(`MyMemory HTTP ${res.status}`);
+    if (!contentType.includes('json')) throw new Error('MyMemory mengirim respons non-JSON');
+    const data = await res.json();
+    const result = data?.responseData?.translatedText;
+    if (data?.responseStatus === 200 && result && !/^\s*['"`].*invalid/i.test(result)) return result.trim();
+    throw new Error(data?.responseDetails || 'Tidak ada hasil dari MyMemory');
+  } catch (err) {
+    failures.push(err.message);
+  }
+
+  try {
+    const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${encodeURIComponent(target)}&dt=t&q=${encodeURIComponent(input)}`;
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        Accept: 'application/json, text/plain, */*'
+      },
+      signal: AbortSignal.timeout(12000)
+    });
+    const contentType = res.headers.get('content-type') || '';
+    if (!res.ok) throw new Error(`Google Translate HTTP ${res.status}`);
+    if (!contentType.includes('json')) throw new Error('Google Translate mengirim halaman HTML, bukan hasil terjemahan');
+    const data = await res.json();
+    const result = Array.isArray(data?.[0]) ? data[0].map((part) => part?.[0] || '').join('') : '';
+    if (result.trim()) return result.trim();
+    throw new Error('Google Translate tidak mengembalikan hasil');
+  } catch (err) {
+    failures.push(err.message);
+  }
+  throw new Error(`Layanan terjemahan sedang tidak tersedia. Coba lagi nanti. (${failures.join('; ')})`);
 }
 
 /**
