@@ -11,8 +11,18 @@ const qrcode = require('qrcode-terminal');
 const fs = require('fs');
 const path = require('path');
 const config = require('./config');
-const { makeSticker } = require('./src/sticker');
+const { makeSticker, stickerToImage } = require('./src/sticker');
 const { upscaleImage } = require('./src/hd');
+const {
+  askAI,
+  translateText,
+  getWikiSummary,
+  getSurah,
+  getJadwalSholat,
+  getWeather,
+  shortenUrl,
+  generateQrBuffer
+} = require('./src/tools');
 
 // Tracking cooldown untuk fitur anti-blokir
 const userCooldowns = new Map();
@@ -51,13 +61,13 @@ function getQuotedParticipant(msg) {
 
 async function getGroupAdminContext(sock, msg) {
   const groupJid = msg.key.remoteJid;
-  if (!groupJid?.endsWith('@g.us')) return { error: 'Perintah ini hanya bisa dipakai di grup.' };
+  if (!groupJid?.endsWith('@g.us')) return { error: 'Perintah ini hanya bisa dipakai di dalam grup.' };
   const metadata = await sock.groupMetadata(groupJid);
   const senderJid = msg.key.participant || msg.key.remoteJid;
   const sender = metadata.participants.find((p) => p.id === senderJid);
   const bot = metadata.participants.find((p) => p.id === sock.user?.id);
   if (!['admin', 'superadmin'].includes(sender?.admin)) return { error: 'Hanya admin grup yang bisa menggunakan perintah ini.' };
-  if (!['admin', 'superadmin'].includes(bot?.admin)) return { error: 'Jadikan bot admin grup terlebih dahulu untuk menjalankan tindakan ini.' };
+  if (!['admin', 'superadmin'].includes(bot?.admin)) return { error: 'Jadikan bot sebagai admin grup terlebih dahulu.' };
   return { groupJid, metadata, senderJid, botJid: sock.user?.id };
 }
 
@@ -171,7 +181,7 @@ async function startBot() {
         continue;
       }
 
-      // Jeda alami agar tidak seperti robot kaku
+      // Jeda alami agar tidak seperti bot kaku
       const delay = Math.floor(
         Math.random() * (config.antiBan.maxTypingDelayMs - config.antiBan.minTypingDelayMs) +
           config.antiBan.minTypingDelayMs
@@ -183,26 +193,51 @@ async function startBot() {
         switch (command) {
           case 'menu':
           case 'help': {
-            const menuText = `🤖 *${config.botName} - Menu Utama*\n\n` +
-              `*FITUR MEDIA & AI:*\n` +
-              `• *${config.prefix}s* : Kirim/reply foto jadi stiker WA\n` +
-              `• *${config.prefix}hd* : Perjelas & upscale kualitas foto\n\n` +
-              `*FITUR UTILITAS:*\n` +
-              `• *${config.prefix}ping* : Cek kecepatan respons bot\n` +
-              `• *${config.prefix}owner* : Kontak pemilik bot\n` +
-              `• *${config.prefix}runtime* : Cek waktu aktif bot\n` +
-              `• *${config.prefix}calc <angka>* : Kalkulator (contoh: ${config.prefix}calc 50*12)\n\n` +
-              `*ADMIN GRUP:*\n` +
-              `• .kick/.promote/.demote @anggota\n• .mute/.unmute • .tagall • .groupinfo\n\n` +
-              `_Catatan: Fitur stiker & HD mendukung kirim foto langsung atau reply foto._`;
+            const menuText =
+              `⚡ *${config.botName.toUpperCase()}* ⚡\n` +
+              `_Prefix Bot: "${config.prefix}"_\n\n` +
+              `🎨 *MEDIA & AI*\n` +
+              `• *${config.prefix}s* : Bikin foto jadi stiker WA\n` +
+              `• *${config.prefix}toimg* : Reply stiker jadi foto kembali\n` +
+              `• *${config.prefix}hd* : Tingkatkan kualitas foto ke HD\n` +
+              `• *${config.prefix}ai <tanya>* : Tanya kecerdasan buatan (AI)\n\n` +
+              `🛠️ *TOOLS & UTILITAS*\n` +
+              `• *${config.prefix}qr <teks/link>* : Buat gambar QR Code\n` +
+              `• *${config.prefix}tr <kode> <teks>* : Terjemahan bahasa (.tr en halo)\n` +
+              `• *${config.prefix}wiki <kata>* : Cari ringkasan di Wikipedia\n` +
+              `• *${config.prefix}short <link>* : Buat shortlink TinyURL\n` +
+              `• *${config.prefix}cuaca <kota>* : Cek cuaca & suhu kota realtime\n` +
+              `• *${config.prefix}calc <angka>* : Kalkulator (${config.prefix}calc 25*40)\n\n` +
+              `🕌 *ISLAMI*\n` +
+              `• *${config.prefix}sholat <kota>* : Jadwal sholat harian akurat\n` +
+              `• *${config.prefix}surah <1-114>* : Info surah Al-Qur'an lengkap\n\n` +
+              `🎲 *GAME & HIBURAN*\n` +
+              `• *${config.prefix}dadu* : Lempar dadu acak 1-6\n` +
+              `• *${config.prefix}koin* : Lempar koin (Gambar/Angka)\n` +
+              `• *${config.prefix}apakah <teks>* : Jawaban acak bot\n` +
+              `• *${config.prefix}siapakah <teks>* : Pilih acak member grup\n` +
+              `• *${config.prefix}rate <teks>* : Nilai rating acak 1-100%\n\n` +
+              `👥 *GRUP ADMIN*\n` +
+              `• *${config.prefix}tagall <pesan>* : Tag semua member secara publik\n` +
+              `• *${config.prefix}hidetag <pesan>* : Mention senyap semua member\n` +
+              `• *${config.prefix}mute* / *${config.prefix}unmute* : Tutup / Buka obrolan grup\n` +
+              `• *${config.prefix}kick* / *${config.prefix}promote* / *${config.prefix}demote* @user\n` +
+              `• *${config.prefix}linkgroup* : Ambil tautan undangan grup\n` +
+              `• *${config.prefix}setname* & *${config.prefix}setdesc*\n` +
+              `• *${config.prefix}groupinfo* : Statistik grup\n\n` +
+              `ℹ️ *INFORMASI*\n` +
+              `• *${config.prefix}ping* : Kecepatan bot\n` +
+              `• *${config.prefix}runtime* : Waktu aktif bot\n` +
+              `• *${config.prefix}owner* : Kontak pemilik bot\n\n` +
+              `_Ketik perintah sesuai yang diinginkan!_`;
 
             await sock.sendMessage(sender, { text: menuText }, { quoted: msg });
             break;
           }
 
+          // ------------------ MEDIA & AI ------------------
           case 's':
           case 'sticker': {
-            // Cek foto langsung atau quoted foto
             let targetImage = null;
             if (rawMsg.imageMessage) {
               targetImage = rawMsg.imageMessage;
@@ -226,16 +261,41 @@ async function startBot() {
             }
 
             await sock.sendMessage(sender, { text: '⏳ Sedang membuat stiker...' }, { quoted: msg });
-
             const buffer = await getMediaBuffer(targetImage, 'image');
             const stickerWebp = await makeSticker(buffer);
 
+            await sock.sendMessage(sender, { sticker: stickerWebp }, { quoted: msg });
+            break;
+          }
+
+          case 'toimg': {
+            let targetSticker = null;
+            const quoted = rawMsg.extendedTextMessage?.contextInfo?.quotedMessage;
+            if (quoted) {
+              const unquoted = unwrapMessage({ message: quoted });
+              if (unquoted?.stickerMessage) {
+                targetSticker = unquoted.stickerMessage;
+              }
+            }
+
+            if (!targetSticker) {
+              await sock.sendMessage(
+                sender,
+                { text: `⚠️ Reply stiker yang ingin diubah menjadi gambar dengan perintah *${config.prefix}toimg*` },
+                { quoted: msg }
+              );
+              break;
+            }
+
+            await sock.sendMessage(sender, { text: '⏳ Mengonversi stiker ke gambar...' }, { quoted: msg });
+            const stickerBuf = await getMediaBuffer(targetSticker, 'sticker');
+            const imgBuffer = await stickerToImage(stickerBuf);
+
             await sock.sendMessage(
               sender,
-              { sticker: stickerWebp },
+              { image: imgBuffer, caption: '✅ Stiker berhasil dikonversi ke gambar!' },
               { quoted: msg }
             );
-            console.log(`[Sticker Sukses] Stiker terkirim ke ${sender}`);
             break;
           }
 
@@ -264,7 +324,6 @@ async function startBot() {
             }
 
             await sock.sendMessage(sender, { text: '⏳ Sedang memperjelas & upscaling foto dengan AI...' }, { quoted: msg });
-
             const buffer = await getMediaBuffer(targetImage, 'image');
             const hdBuffer = await upscaleImage(buffer);
 
@@ -276,10 +335,314 @@ async function startBot() {
               },
               { quoted: msg }
             );
-            console.log(`[HD Sukses] Foto HD terkirim ke ${sender}`);
             break;
           }
 
+          case 'ai':
+          case 'ask':
+          case 'tanya': {
+            const prompt = args.join(' ');
+            if (!prompt) {
+              await sock.sendMessage(sender, { text: '⚠️ Masukkan pertanyaan untuk AI. Contoh: .ai jelaskan teori relativitas secara singkat' }, { quoted: msg });
+              break;
+            }
+            await sock.sendMessage(sender, { text: '💭 Sedang berpikir...' }, { quoted: msg });
+            const answer = await askAI(prompt);
+            await sock.sendMessage(sender, { text: `🤖 *Jawaban AI:*\n\n${answer}` }, { quoted: msg });
+            break;
+          }
+
+          // ------------------ TOOLS & UTILITAS ------------------
+          case 'qr':
+          case 'qrcode': {
+            const text = args.join(' ');
+            if (!text) {
+              await sock.sendMessage(sender, { text: '⚠️ Masukkan teks atau URL. Contoh: .qr https://google.com' }, { quoted: msg });
+              break;
+            }
+            await sock.sendMessage(sender, { text: '⏳ Sedang membuat QR Code...' }, { quoted: msg });
+            const qrBuf = await generateQrBuffer(text);
+            await sock.sendMessage(sender, { image: qrBuf, caption: `✅ QR Code untuk:\n"${text}"` }, { quoted: msg });
+            break;
+          }
+
+          case 'tr':
+          case 'translate': {
+            if (args.length === 0) {
+              await sock.sendMessage(
+                sender,
+                { text: '⚠️ Format: .tr <kode_bahasa> <teks>\nContoh:\n• .tr en selamat pagi\n• .tr id good morning\n• .tr ja terima kasih' },
+                { quoted: msg }
+              );
+              break;
+            }
+            let targetLang = 'id';
+            let text = '';
+            if (args[0].length === 2) {
+              targetLang = args[0].toLowerCase();
+              text = args.slice(1).join(' ');
+            } else {
+              text = args.join(' ');
+            }
+            if (!text) {
+              await sock.sendMessage(sender, { text: '⚠️ Masukkan teks yang ingin diterjemahkan!' }, { quoted: msg });
+              break;
+            }
+            const translated = await translateText(text, targetLang);
+            await sock.sendMessage(sender, { text: `🌐 *Terjemahan (${targetLang.toUpperCase()}):*\n\n${translated}` }, { quoted: msg });
+            break;
+          }
+
+          case 'wiki':
+          case 'wikipedia': {
+            const q = args.join(' ');
+            if (!q) {
+              await sock.sendMessage(sender, { text: '⚠️ Masukkan topik yang ingin dicari. Contoh: .wiki Indonesia' }, { quoted: msg });
+              break;
+            }
+            await sock.sendMessage(sender, { text: '🔍 Mencari di Wikipedia...' }, { quoted: msg });
+            const info = await getWikiSummary(q);
+            const caption = `📚 *${info.title}*\n\n${info.extract}\n\n_Sumber: Wikipedia Indonesia_`;
+            if (info.thumbnail) {
+              await sock.sendMessage(sender, { image: { url: info.thumbnail }, caption }, { quoted: msg });
+            } else {
+              await sock.sendMessage(sender, { text: caption }, { quoted: msg });
+            }
+            break;
+          }
+
+          case 'short':
+          case 'shortlink': {
+            const url = args[0];
+            if (!url || !url.startsWith('http')) {
+              await sock.sendMessage(sender, { text: '⚠️ Masukkan URL valid diawali http:// atau https://\nContoh: .short https://google.com' }, { quoted: msg });
+              break;
+            }
+            const tiny = await shortenUrl(url);
+            await sock.sendMessage(sender, { text: `🔗 *Shortlink Berhasil:*\n${tiny}` }, { quoted: msg });
+            break;
+          }
+
+          case 'cuaca':
+          case 'weather': {
+            const kota = args.join(' ') || 'Jakarta';
+            await sock.sendMessage(sender, { text: `⏳ Memeriksa cuaca di ${kota}...` }, { quoted: msg });
+            const res = await getWeather(kota);
+            await sock.sendMessage(sender, { text: `🌤️ *Laporan Cuaca:*\n${res}` }, { quoted: msg });
+            break;
+          }
+
+          case 'calc': {
+            const expression = args.join(' ');
+            if (!expression || !/^[0-9+\-*/().\s]+$/.test(expression)) {
+              await sock.sendMessage(sender, { text: '⚠️ Masukkan operasi matematika valid. Contoh: .calc 100 * 25' }, { quoted: msg });
+              break;
+            }
+            try {
+              const result = Function(`'use strict'; return (${expression})`)();
+              await sock.sendMessage(sender, { text: `🔢 *Hasil:* ${expression} = *${result}*` }, { quoted: msg });
+            } catch {
+              await sock.sendMessage(sender, { text: '⚠️ Format kalkulasi salah!' }, { quoted: msg });
+            }
+            break;
+          }
+
+          // ------------------ ISLAMI ------------------
+          case 'sholat':
+          case 'jadwalsholat': {
+            const kota = args.join(' ') || 'Jakarta';
+            await sock.sendMessage(sender, { text: `⏳ Mengambil jadwal sholat untuk ${kota}...` }, { quoted: msg });
+            const j = await getJadwalSholat(kota);
+            const text = `🕌 *Jadwal Sholat - ${j.kota}*\n📅 ${j.tanggal}\n\n` +
+              `• Imsak   : ${j.imsak}\n` +
+              `• Subuh   : ${j.subuh}\n` +
+              `• Terbit  : ${j.terbit}\n` +
+              `• Dhuha   : ${j.dhuha}\n` +
+              `• Dzuhur  : ${j.dzuhur}\n` +
+              `• Ashar   : ${j.ashar}\n` +
+              `• Maghrib : ${j.maghrib}\n` +
+              `• Isya    : ${j.isya}\n\n` +
+              `_Waktu setempat (WIB/WITA/WIT)_`;
+            await sock.sendMessage(sender, { text }, { quoted: msg });
+            break;
+          }
+
+          case 'surah':
+          case 'quran': {
+            const nomor = parseInt(args[0], 10);
+            if (!nomor || nomor < 1 || nomor > 114) {
+              await sock.sendMessage(sender, { text: '⚠️ Masukkan nomor surah (1 - 114). Contoh: .surah 1' }, { quoted: msg });
+              break;
+            }
+            const s = await getSurah(nomor);
+            const text = `📖 *Surah ${s.namaLatin} (${s.nama})*\n` +
+              `• Arti: *${s.arti}*\n` +
+              `• Jumlah Ayat: ${s.jumlahAyat}\n` +
+              `• Tempat Turun: ${s.tempatTurun}\n\n` +
+              `*Deskripsi:*\n${s.deskripsi.slice(0, 450)}...`;
+            await sock.sendMessage(sender, { text }, { quoted: msg });
+            break;
+          }
+
+          // ------------------ GAME & HIBURAN ------------------
+          case 'dadu': {
+            const diceEmojis = ['⚀ 1', '⚁ 2', '⚂ 3', '⚃ 4', '⚄ 5', '⚅ 6'];
+            const roll = diceEmojis[Math.floor(Math.random() * diceEmojis.length)];
+            await sock.sendMessage(sender, { text: `🎲 Dadu dilempar dan hasilnya: *${roll}*` }, { quoted: msg });
+            break;
+          }
+
+          case 'koin': {
+            const sides = ['🪙 GAMBAR', '🪙 ANGKA'];
+            const pick = sides[Math.floor(Math.random() * sides.length)];
+            await sock.sendMessage(sender, { text: `Lemparan koin mendarat di: *${pick}*!` }, { quoted: msg });
+            break;
+          }
+
+          case 'apakah': {
+            const q = args.join(' ');
+            if (!q) {
+              await sock.sendMessage(sender, { text: 'Contoh: .apakah besok bakal hujan?' }, { quoted: msg });
+              break;
+            }
+            const answers = [
+              'Iya, pasti!',
+              'Tidak mungkin.',
+              'Bisa jadi sih.',
+              'Kayaknya enggak deh.',
+              'Tentu saja!',
+              'Coba tanya lagi nanti ya.',
+              'Peluangnya 50:50.',
+              'Sangat meragukan.'
+            ];
+            const pick = answers[Math.floor(Math.random() * answers.length)];
+            await sock.sendMessage(sender, { text: `🎱 *Pertanyaan:* Apakah ${q}?\n*Jawaban:* ${pick}` }, { quoted: msg });
+            break;
+          }
+
+          case 'siapakah': {
+            const groupJid = msg.key.remoteJid;
+            if (!groupJid?.endsWith('@g.us')) {
+              await sock.sendMessage(sender, { text: 'Perintah ini hanya bisa dipakai di dalam grup.' }, { quoted: msg });
+              break;
+            }
+            const metadata = await sock.groupMetadata(groupJid);
+            const participants = metadata.participants;
+            if (!participants || participants.length === 0) break;
+            const randomMember = participants[Math.floor(Math.random() * participants.length)];
+            const q = args.join(' ') || 'yang paling keren';
+            await sock.sendMessage(
+              groupJid,
+              {
+                text: `Pertanyaan: *Siapakah ${q}?*\n\nJawaban bot: @${randomMember.id.split('@')[0]}! 😎`,
+                mentions: [randomMember.id]
+              },
+              { quoted: msg }
+            );
+            break;
+          }
+
+          case 'rate': {
+            const target = args.join(' ');
+            if (!target) {
+              await sock.sendMessage(sender, { text: 'Contoh: .rate seberapa jago bermain game' }, { quoted: msg });
+              break;
+            }
+            const score = Math.floor(Math.random() * 101);
+            await sock.sendMessage(sender, { text: `📊 *Penilaian:* "${target}"\n*Skor:* ${score}%` }, { quoted: msg });
+            break;
+          }
+
+          // ------------------ GRUP ADMIN ------------------
+          case 'kick':
+          case 'remove':
+          case 'promote':
+          case 'demote':
+          case 'mute':
+          case 'unmute':
+          case 'tagall':
+          case 'hidetag':
+          case 'linkgroup':
+          case 'linkgc':
+          case 'setname':
+          case 'setdesc':
+          case 'groupinfo': {
+            const ctx = await getGroupAdminContext(sock, msg);
+            if (ctx.error) {
+              await sock.sendMessage(sender, { text: `⛔ ${ctx.error}` }, { quoted: msg });
+              break;
+            }
+
+            if (command === 'groupinfo') {
+              const admins = ctx.metadata.participants.filter((p) => ['admin', 'superadmin'].includes(p.admin));
+              await sock.sendMessage(sender, { text: `📋 *${ctx.metadata.subject}*\n• ID: ${ctx.groupJid}\n• Anggota: ${ctx.metadata.participants.length}\n• Admin: ${admins.length}` }, { quoted: msg });
+              break;
+            }
+
+            if (command === 'linkgroup' || command === 'linkgc') {
+              const code = await sock.groupInviteCode(ctx.groupJid);
+              await sock.sendMessage(sender, { text: `🔗 *Tautan Undangan Grup:*\nhttps://chat.whatsapp.com/${code}` }, { quoted: msg });
+              break;
+            }
+
+            if (command === 'setname') {
+              const newName = args.join(' ');
+              if (!newName) {
+                await sock.sendMessage(sender, { text: '⚠️ Masukkan nama baru grup. Contoh: .setname Grup Keren' }, { quoted: msg });
+                break;
+              }
+              await sock.groupUpdateSubject(ctx.groupJid, newName);
+              await sock.sendMessage(sender, { text: `✅ Berhasil mengganti nama grup menjadi: *${newName}*` }, { quoted: msg });
+              break;
+            }
+
+            if (command === 'setdesc') {
+              const newDesc = args.join(' ');
+              await sock.groupUpdateDescription(ctx.groupJid, newDesc);
+              await sock.sendMessage(sender, { text: `✅ Berhasil memperbarui deskripsi grup!` }, { quoted: msg });
+              break;
+            }
+
+            if (command === 'mute' || command === 'unmute') {
+              await sock.groupSettingUpdate(ctx.groupJid, command === 'mute' ? 'announcement' : 'not_announcement');
+              await sock.sendMessage(sender, { text: command === 'mute' ? '🔇 Grup kini hanya bisa dikirim pesan oleh admin.' : '🔊 Grup dibuka kembali untuk semua anggota.' }, { quoted: msg });
+              break;
+            }
+
+            if (command === 'tagall') {
+              const mentions = ctx.metadata.participants.map((p) => p.id);
+              const text = args.join(' ') || 'Pemberitahuan untuk semua anggota';
+              await sock.sendMessage(ctx.groupJid, { text: `📢 ${text}`, mentions }, { quoted: msg });
+              break;
+            }
+
+            if (command === 'hidetag') {
+              const mentions = ctx.metadata.participants.map((p) => p.id);
+              const text = args.join(' ') || 'Halo semua 👋';
+              await sock.sendMessage(ctx.groupJid, { text, mentions });
+              break;
+            }
+
+            const targets = getMentionedJids(msg);
+            const target = targets[0] || getQuotedParticipant(msg);
+            if (!target) {
+              await sock.sendMessage(sender, { text: `Gunakan dengan mention atau reply anggota. Contoh: .${command} @anggota` }, { quoted: msg });
+              break;
+            }
+            if (target === ctx.botJid || target === ctx.senderJid) {
+              await sock.sendMessage(sender, { text: '⛔ Bot tidak akan mengubah peran atau mengeluarkan dirinya/pengirim perintah.' }, { quoted: msg });
+              break;
+            }
+            if (command === 'kick' || command === 'remove') {
+              await sock.groupParticipantsUpdate(ctx.groupJid, [target], 'remove');
+            } else {
+              await sock.groupParticipantsUpdate(ctx.groupJid, [target], command);
+            }
+            await sock.sendMessage(sender, { text: `✅ Perintah *${command}* diproses untuk @${target.split('@')[0]}.`, mentions: [target] }, { quoted: msg });
+            break;
+          }
+
+          // ------------------ INFORMASI BOT ------------------
           case 'ping': {
             const start = Date.now();
             await sock.sendMessage(sender, { text: `Pong! 🏓 (${Date.now() - start} ms)` }, { quoted: msg });
@@ -305,73 +668,6 @@ async function startBot() {
               { text: `⏱️ Bot sudah aktif selama: ${hours} jam, ${minutes} menit, ${seconds} detik` },
               { quoted: msg }
             );
-            break;
-          }
-
-          case 'calc': {
-            const expression = args.join(' ');
-            if (!expression || !/^[0-9+\-*/().\s]+$/.test(expression)) {
-              await sock.sendMessage(sender, { text: '⚠️ Masukkan operasi matematika valid. Contoh: .calc 100 * 25' }, { quoted: msg });
-              break;
-            }
-            try {
-              const result = Function(`'use strict'; return (${expression})`)();
-              await sock.sendMessage(sender, { text: `🔢 *Hasil:* ${expression} = *${result}*` }, { quoted: msg });
-            } catch {
-              await sock.sendMessage(sender, { text: '⚠️ Format kalkulasi salah!' }, { quoted: msg });
-            }
-            break;
-          }
-
-          case 'kick':
-          case 'remove':
-          case 'promote':
-          case 'demote':
-          case 'mute':
-          case 'unmute':
-          case 'tagall':
-          case 'groupinfo': {
-            const ctx = await getGroupAdminContext(sock, msg);
-            if (ctx.error) {
-              await sock.sendMessage(sender, { text: `⛔ ${ctx.error}` }, { quoted: msg });
-              break;
-            }
-
-            if (command === 'groupinfo') {
-              const admins = ctx.metadata.participants.filter((p) => ['admin', 'superadmin'].includes(p.admin));
-              await sock.sendMessage(sender, { text: `📋 *${ctx.metadata.subject}*\nAnggota: ${ctx.metadata.participants.length}\nAdmin: ${admins.length}` }, { quoted: msg });
-              break;
-            }
-
-            if (command === 'mute' || command === 'unmute') {
-              await sock.groupSettingUpdate(ctx.groupJid, command === 'mute' ? 'announcement' : 'not_announcement');
-              await sock.sendMessage(sender, { text: command === 'mute' ? '🔇 Grup kini hanya bisa dikirim pesan oleh admin.' : '🔊 Grup dibuka kembali untuk semua anggota.' }, { quoted: msg });
-              break;
-            }
-
-            if (command === 'tagall') {
-              const mentions = ctx.metadata.participants.map((p) => p.id);
-              const text = args.join(' ') || 'Pemberitahuan untuk semua anggota';
-              await sock.sendMessage(ctx.groupJid, { text: `📢 ${text}`, mentions }, { quoted: msg });
-              break;
-            }
-
-            const targets = getMentionedJids(msg);
-            const target = targets[0] || getQuotedParticipant(msg);
-            if (!target) {
-              await sock.sendMessage(sender, { text: `Gunakan dengan mention atau reply anggota. Contoh: .${command} @anggota` }, { quoted: msg });
-              break;
-            }
-            if (target === ctx.botJid || target === ctx.senderJid) {
-              await sock.sendMessage(sender, { text: '⛔ Bot tidak akan mengubah peran atau mengeluarkan dirinya/pengirim perintah.' }, { quoted: msg });
-              break;
-            }
-            if (command === 'kick' || command === 'remove') {
-              await sock.groupParticipantsUpdate(ctx.groupJid, [target], 'remove');
-            } else {
-              await sock.groupParticipantsUpdate(ctx.groupJid, [target], command);
-            }
-            await sock.sendMessage(sender, { text: `✅ Perintah *${command}* diproses untuk @${target.split('@')[0]}.`, mentions: [target] }, { quoted: msg });
             break;
           }
 
