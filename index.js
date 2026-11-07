@@ -2,7 +2,7 @@ const {
   default: makeWASocket,
   useMultiFileAuthState,
   DisconnectReason,
-  downloadMediaMessage,
+  downloadContentFromMessage,
   fetchLatestBaileysVersion,
   Browsers
 } = require('@whiskeysockets/baileys');
@@ -55,10 +55,31 @@ async function getGroupAdminContext(sock, msg) {
   const metadata = await sock.groupMetadata(groupJid);
   const senderJid = msg.key.participant || msg.key.remoteJid;
   const sender = metadata.participants.find((p) => p.id === senderJid);
-  const bot = metadata.participants.find((p) => p.id === sock.user.id);
+  const bot = metadata.participants.find((p) => p.id === sock.user?.id);
   if (!['admin', 'superadmin'].includes(sender?.admin)) return { error: 'Hanya admin grup yang bisa menggunakan perintah ini.' };
   if (!['admin', 'superadmin'].includes(bot?.admin)) return { error: 'Jadikan bot admin grup terlebih dahulu untuk menjalankan tindakan ini.' };
-  return { groupJid, metadata, senderJid, botJid: sock.user.id };
+  return { groupJid, metadata, senderJid, botJid: sock.user?.id };
+}
+
+// Helper untuk unwrap pesan WhatsApp (ephemeral, viewOnce, dll)
+function unwrapMessage(msg) {
+  let m = msg.message;
+  if (!m) return null;
+  if (m.ephemeralMessage) m = m.ephemeralMessage.message;
+  if (m.viewOnceMessage) m = m.viewOnceMessage.message;
+  if (m.viewOnceMessageV2) m = m.viewOnceMessageV2.message;
+  if (m.documentWithCaptionMessage) m = m.documentWithCaptionMessage.message;
+  return m;
+}
+
+// Helper untuk download media buffer langsung dari Baileys stream
+async function getMediaBuffer(mediaMsg, type = 'image') {
+  const stream = await downloadContentFromMessage(mediaMsg, type);
+  let buffer = Buffer.from([]);
+  for await (const chunk of stream) {
+    buffer = Buffer.concat([buffer, chunk]);
+  }
+  return buffer;
 }
 
 async function startBot() {
@@ -75,9 +96,9 @@ async function startBot() {
     logger: pino({ level: 'silent' }),
     printQRInTerminal: false,
     auth: state,
-    browser: Browsers.macOS('Desktop'), // Menyamar sebagai browser desktop MacOS (anti-ban)
+    browser: Browsers.macOS('Desktop'),
     syncFullHistory: false,
-    markOnlineOnConnect: false // Jangan paksa online terus-menerus
+    markOnlineOnConnect: false
   });
 
   sock.ev.on('connection.update', async (update) => {
@@ -111,35 +132,46 @@ async function startBot() {
     if (type !== 'notify') return;
 
     for (const msg of messages) {
-      if (!msg.message || msg.key.fromMe) continue;
+      if (!msg.message) continue;
+      if (msg.key.remoteJid === 'status@broadcast') continue;
+
+      const rawMsg = unwrapMessage(msg);
+      if (!rawMsg) continue;
 
       const sender = msg.key.remoteJid;
-      const messageContent = msg.message;
-      const messageType = Object.keys(messageContent)[0];
+      const isFromMe = Boolean(msg.key.fromMe);
 
-      // Ambil teks dari berbagai jenis pesan
+      // Ambil teks dari berbagai kemungkinan pesan
       let bodyText = '';
-      if (messageType === 'conversation') {
-        bodyText = messageContent.conversation;
-      } else if (messageType === 'extendedTextMessage') {
-        bodyText = messageContent.extendedTextMessage.text;
-      } else if (messageType === 'imageMessage') {
-        bodyText = messageContent.imageMessage.caption || '';
+      if (rawMsg.conversation) {
+        bodyText = rawMsg.conversation;
+      } else if (rawMsg.extendedTextMessage?.text) {
+        bodyText = rawMsg.extendedTextMessage.text;
+      } else if (rawMsg.imageMessage?.caption) {
+        bodyText = rawMsg.imageMessage.caption;
+      } else if (rawMsg.videoMessage?.caption) {
+        bodyText = rawMsg.videoMessage.caption;
       }
 
       bodyText = (bodyText || '').trim();
-      if (!bodyText.startsWith(config.prefix)) continue;
+
+      // Hanya proses pesan yang diawali prefix (contoh: .s, .menu)
+      if (!bodyText.startsWith(config.prefix)) {
+        continue;
+      }
 
       const args = bodyText.slice(config.prefix.length).trim().split(/ +/);
       const command = args.shift().toLowerCase();
 
-      // Cek proteksi anti-spam / anti-ban
-      if (isCoolingDown(sender)) {
+      console.log(`[Pesan Masuk] Command: ${config.prefix}${command} | Dari: ${sender} | Self: ${isFromMe}`);
+
+      // Cek proteksi anti-spam (kecuali dari diri sendiri/owner)
+      if (!isFromMe && isCoolingDown(sender)) {
         console.log(`[Anti-Spam] Mengabaikan spam dari: ${sender}`);
         continue;
       }
 
-      // Human-like typing delay simulasi
+      // Jeda alami agar tidak seperti robot kaku
       const delay = Math.floor(
         Math.random() * (config.antiBan.maxTypingDelayMs - config.antiBan.minTypingDelayMs) +
           config.antiBan.minTypingDelayMs
@@ -159,10 +191,10 @@ async function startBot() {
               `• *${config.prefix}ping* : Cek kecepatan respons bot\n` +
               `• *${config.prefix}owner* : Kontak pemilik bot\n` +
               `• *${config.prefix}runtime* : Cek waktu aktif bot\n` +
-              `\n*ADMIN GRUP (khusus admin):*\n` +
-              `• .kick/.promote/.demote @anggota\n• .mute/.unmute • .tagall • .groupinfo\n` +
-              `• *${config.prefix}calc <angka>* : Kalkulator cepat (contoh: ${config.prefix}calc 50*12)\n\n` +
-              `_Catatan: Bot dilengkapi fitur anti-spam & jeda alami._`;
+              `• *${config.prefix}calc <angka>* : Kalkulator (contoh: ${config.prefix}calc 50*12)\n\n` +
+              `*ADMIN GRUP:*\n` +
+              `• .kick/.promote/.demote @anggota\n• .mute/.unmute • .tagall • .groupinfo\n\n` +
+              `_Catatan: Fitur stiker & HD mendukung kirim foto langsung atau reply foto._`;
 
             await sock.sendMessage(sender, { text: menuText }, { quoted: msg });
             break;
@@ -170,13 +202,21 @@ async function startBot() {
 
           case 's':
           case 'sticker': {
-            // Cek apakah pesan sendiri adalah gambar atau me-reply gambar
-            const isQuotedImage =
-              messageType === 'extendedTextMessage' &&
-              messageContent.extendedTextMessage.contextInfo?.quotedMessage?.imageMessage;
-            const isDirectImage = messageType === 'imageMessage';
+            // Cek foto langsung atau quoted foto
+            let targetImage = null;
+            if (rawMsg.imageMessage) {
+              targetImage = rawMsg.imageMessage;
+            } else {
+              const quoted = rawMsg.extendedTextMessage?.contextInfo?.quotedMessage;
+              if (quoted) {
+                const unquoted = unwrapMessage({ message: quoted });
+                if (unquoted?.imageMessage) {
+                  targetImage = unquoted.imageMessage;
+                }
+              }
+            }
 
-            if (!isDirectImage && !isQuotedImage) {
+            if (!targetImage) {
               await sock.sendMessage(
                 sender,
                 { text: `⚠️ Kirim foto dengan caption *${config.prefix}s* atau reply foto dengan *${config.prefix}s*` },
@@ -187,25 +227,7 @@ async function startBot() {
 
             await sock.sendMessage(sender, { text: '⏳ Sedang membuat stiker...' }, { quoted: msg });
 
-            // Download media gambar
-            let mediaMessageToDownload;
-            if (isDirectImage) {
-              mediaMessageToDownload = msg;
-            } else {
-              mediaMessageToDownload = {
-                message: {
-                  imageMessage: messageContent.extendedTextMessage.contextInfo.quotedMessage.imageMessage
-                }
-              };
-            }
-
-            const buffer = await downloadMediaMessage(
-              mediaMessageToDownload,
-              'buffer',
-              {},
-              { logger: pino({ level: 'silent' }) }
-            );
-
+            const buffer = await getMediaBuffer(targetImage, 'image');
             const stickerWebp = await makeSticker(buffer);
 
             await sock.sendMessage(
@@ -213,17 +235,26 @@ async function startBot() {
               { sticker: stickerWebp },
               { quoted: msg }
             );
+            console.log(`[Sticker Sukses] Stiker terkirim ke ${sender}`);
             break;
           }
 
           case 'hd':
           case 'remini': {
-            const isQuotedImage =
-              messageType === 'extendedTextMessage' &&
-              messageContent.extendedTextMessage.contextInfo?.quotedMessage?.imageMessage;
-            const isDirectImage = messageType === 'imageMessage';
+            let targetImage = null;
+            if (rawMsg.imageMessage) {
+              targetImage = rawMsg.imageMessage;
+            } else {
+              const quoted = rawMsg.extendedTextMessage?.contextInfo?.quotedMessage;
+              if (quoted) {
+                const unquoted = unwrapMessage({ message: quoted });
+                if (unquoted?.imageMessage) {
+                  targetImage = unquoted.imageMessage;
+                }
+              }
+            }
 
-            if (!isDirectImage && !isQuotedImage) {
+            if (!targetImage) {
               await sock.sendMessage(
                 sender,
                 { text: `⚠️ Kirim foto dengan caption *${config.prefix}hd* atau reply foto dengan *${config.prefix}hd*` },
@@ -234,24 +265,7 @@ async function startBot() {
 
             await sock.sendMessage(sender, { text: '⏳ Sedang memperjelas & upscaling foto dengan AI...' }, { quoted: msg });
 
-            let mediaMessageToDownload;
-            if (isDirectImage) {
-              mediaMessageToDownload = msg;
-            } else {
-              mediaMessageToDownload = {
-                message: {
-                  imageMessage: messageContent.extendedTextMessage.contextInfo.quotedMessage.imageMessage
-                }
-              };
-            }
-
-            const buffer = await downloadMediaMessage(
-              mediaMessageToDownload,
-              'buffer',
-              {},
-              { logger: pino({ level: 'silent' }) }
-            );
-
+            const buffer = await getMediaBuffer(targetImage, 'image');
             const hdBuffer = await upscaleImage(buffer);
 
             await sock.sendMessage(
@@ -262,6 +276,7 @@ async function startBot() {
               },
               { quoted: msg }
             );
+            console.log(`[HD Sukses] Foto HD terkirim ke ${sender}`);
             break;
           }
 
@@ -300,7 +315,6 @@ async function startBot() {
               break;
             }
             try {
-              // Evaluasi kalkulasi aritmatika aman
               const result = Function(`'use strict'; return (${expression})`)();
               await sock.sendMessage(sender, { text: `🔢 *Hasil:* ${expression} = *${result}*` }, { quoted: msg });
             } catch {
@@ -362,7 +376,6 @@ async function startBot() {
           }
 
           default:
-            // Perintah tidak dikenal diabaikan agar tidak spamming chat
             break;
         }
       } catch (err) {
