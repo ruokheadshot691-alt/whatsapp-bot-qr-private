@@ -30,6 +30,43 @@ const userMsgCounts = new Map();
 
 // Sesi memori percakapan AI per pengirim (hemat RAM 256MB)
 const aiChatSessions = new Map();
+const aiSettingsFile = path.join(__dirname, 'data', 'ai-settings.json');
+const aiSettings = new Map();
+try {
+  fs.mkdirSync(path.dirname(aiSettingsFile), { recursive: true });
+  const savedAiSettings = JSON.parse(fs.readFileSync(aiSettingsFile, 'utf8'));
+  for (const [jid, settings] of Object.entries(savedAiSettings)) {
+    if (settings && typeof settings === 'object') aiSettings.set(jid, settings);
+  }
+} catch (err) {
+  if (err.code !== 'ENOENT') console.warn('[AI Settings] Gagal membaca file persona:', err.message);
+}
+
+function saveAiSettings() {
+  fs.mkdirSync(path.dirname(aiSettingsFile), { recursive: true });
+  const tempFile = `${aiSettingsFile}.tmp`;
+  fs.writeFileSync(tempFile, JSON.stringify(Object.fromEntries(aiSettings), null, 2), { mode: 0o600 });
+  try { fs.chmodSync(tempFile, 0o600); } catch {}
+  fs.renameSync(tempFile, aiSettingsFile);
+}
+
+function getQuotedText(rawMsg) {
+  const context = rawMsg?.extendedTextMessage?.contextInfo;
+  if (!context?.quotedMessage) return '';
+  const quoted = unwrapMessage({ message: context.quotedMessage });
+  if (!quoted) return '';
+  return String(
+    quoted.conversation ||
+    quoted.extendedTextMessage?.text ||
+    quoted.imageMessage?.caption ||
+    quoted.videoMessage?.caption ||
+    quoted.documentMessage?.caption ||
+    quoted.documentWithCaptionMessage?.message?.documentMessage?.caption ||
+    quoted.buttonsResponseMessage?.selectedDisplayText ||
+    quoted.listResponseMessage?.title ||
+    ''
+  ).trim();
+}
 
 // Bersihkan riwayat AI yang sudah tidak aktif lebih dari 30 menit
 setInterval(() => {
@@ -162,6 +199,7 @@ async function startBot() {
       if (!rawMsg) continue;
 
       const sender = msg.key.remoteJid;
+      const userKey = msg.key.participant || sender;
       const isFromMe = Boolean(msg.key.fromMe);
 
       // Ambil teks dari berbagai kemungkinan pesan
@@ -184,7 +222,10 @@ async function startBot() {
       }
 
       const args = bodyText.slice(config.prefix.length).trim().split(/ +/);
-      const command = args.shift().toLowerCase();
+      const command = (args.shift() || '').toLowerCase();
+      // Perintah tanpa argumen dapat memakai isi pesan yang sedang di-reply.
+      const quotedText = getQuotedText(rawMsg);
+      if (args.length === 0 && quotedText) args.push(quotedText);
 
       console.log(`[Pesan Masuk] Command: ${config.prefix}${command} | Dari: ${sender} | Self: ${isFromMe}`);
 
@@ -214,7 +255,10 @@ async function startBot() {
               `• *${config.prefix}toimg* : Reply stiker jadi foto kembali\n` +
               `• *${config.prefix}hd* : Tingkatkan kualitas foto ke HD\n` +
               `• *${config.prefix}ai <tanya>* : Tanya AI (Mendukung memori percakapan)\n` +
-              `• *${config.prefix}resetai* : Hapus ingatan percakapan AI\n\n` +
+              `• *${config.prefix}resetai* : Hapus ingatan percakapan AI\n` +
+              `• *${config.prefix}persona <karakter>* : Atur persona AI pribadi\n` +
+              `• *${config.prefix}persona reset* : Hapus persona khusus\n` +
+              `• Reply pesan lalu kirim perintah untuk memakai teksnya sebagai input\n\n` +
               `🛠️ *TOOLS & UTILITAS*\n` +
               `• *${config.prefix}qr <teks/link>* : Buat gambar QR Code\n` +
               `• *${config.prefix}tr <kode> <teks>* : Terjemahan bahasa (.tr en halo)\n` +
@@ -373,7 +417,7 @@ async function startBot() {
             }
 
             if (prompt.toLowerCase() === 'reset' || prompt.toLowerCase() === 'clear') {
-              aiChatSessions.delete(sender);
+              aiChatSessions.delete(userKey);
               await sock.sendMessage(
                 sender,
                 {
@@ -387,11 +431,12 @@ async function startBot() {
             await sock.sendMessage(sender, { text: '💭 Sedang berpikir...' }, { quoted: msg });
 
             // Ambil sesi memori user
-            const session = aiChatSessions.get(sender) || { history: [], lastActive: Date.now() };
+            const session = aiChatSessions.get(userKey) || { history: [], lastActive: Date.now() };
             session.lastActive = Date.now();
 
             try {
-              const answer = await askAI(prompt, session.history, sender);
+              const persona = aiSettings.get(userKey)?.persona || '';
+              const answer = await askAI(prompt, session.history, userKey, persona);
 
               // Simpan giliran obrolan ke riwayat memori (maksimal 10 pesan terakhir)
               session.history.push({ role: 'user', content: prompt });
@@ -399,7 +444,7 @@ async function startBot() {
               if (session.history.length > 10) {
                 session.history = session.history.slice(-10);
               }
-              aiChatSessions.set(sender, session);
+              aiChatSessions.set(userKey, session);
 
               await sock.sendMessage(
                 sender,
@@ -419,9 +464,46 @@ async function startBot() {
             break;
           }
 
+          case 'persona':
+          case 'setpersona':
+          case 'mypersona': {
+            const personaText = args.join(' ').trim();
+            const lowerPersona = personaText.toLowerCase();
+            if (!personaText || ['lihat', 'show', 'info'].includes(lowerPersona)) {
+              const currentPersona = aiSettings.get(userKey)?.persona;
+              await sock.sendMessage(sender, {
+                text: currentPersona
+                  ? `🎭 *Persona AI kamu:*\n${currentPersona}\n\nUbah: *.persona <deskripsi karakter>*\nHapus: *.persona reset*`
+                  : `🎭 Belum ada persona khusus.\nPakai *.persona <deskripsi karakter>* untuk mengatur, misalnya: *.persona guru yang sabar, jawab ringkas dalam Bahasa Indonesia*.\n\nKamu juga bisa reply pesan berisi deskripsi persona dengan *.persona*.`
+              }, { quoted: msg });
+              break;
+            }
+            if (['reset', 'hapus', 'clear', 'default'].includes(lowerPersona)) {
+              const settings = aiSettings.get(userKey) || {};
+              delete settings.persona;
+              if (Object.keys(settings).length) aiSettings.set(userKey, settings);
+              else aiSettings.delete(userKey);
+              saveAiSettings();
+              aiChatSessions.delete(userKey);
+              await sock.sendMessage(sender, { text: '✅ Persona khusus dihapus. AI kembali ke persona bawaan. Memori obrolan juga direset.' }, { quoted: msg });
+              break;
+            }
+            if (personaText.length > 500) {
+              await sock.sendMessage(sender, { text: '⚠️ Deskripsi persona maksimal 500 karakter.' }, { quoted: msg });
+              break;
+            }
+            const settings = aiSettings.get(userKey) || {};
+            settings.persona = personaText;
+            aiSettings.set(userKey, settings);
+            saveAiSettings();
+            aiChatSessions.delete(userKey);
+            await sock.sendMessage(sender, { text: `✅ Persona AI tersimpan untuk kamu:\n🎭 ${personaText}\n\nMemori AI direset supaya persona baru langsung berlaku. Coba lanjut dengan *.ai halo*.` }, { quoted: msg });
+            break;
+          }
+
           case 'resetai':
           case 'cleari': {
-            aiChatSessions.delete(sender);
+            aiChatSessions.delete(userKey);
             await sock.sendMessage(
               sender,
               {
@@ -450,23 +532,22 @@ async function startBot() {
           case 'tr':
           case 'translate': {
             if (args.length === 0) {
-              await sock.sendMessage(
-                sender,
-                { text: '⚠️ Format: .tr <kode_bahasa> <teks>\nContoh:\n• .tr en selamat pagi\n• .tr id good morning\n• .tr ja terima kasih' },
-                { quoted: msg }
-              );
+              await sock.sendMessage(sender, {
+                text: '⚠️ Format: .tr [kode_bahasa] <teks>\nBalas sebuah pesan lalu ketik *.tr* untuk menerjemahkannya ke Bahasa Indonesia.\nContoh: *.tr en selamat pagi* atau reply teks dengan *.tr en*.'
+              }, { quoted: msg });
               break;
             }
+            const languageAliases = new Set(['id', 'en', 'ja', 'ko', 'zh', 'cn', 'ar', 'de', 'fr', 'es', 'ru', 'jp', 'eng', 'english', 'inggris', 'indo', 'indonesia', 'jepang', 'korea', 'mandarin', 'arabic', 'arab', 'jerman', 'prancis', 'spanyol', 'rusia']);
+            for (const code of ['af','sq','am','hy','az','eu','be','bn','bs','bg','my','ca','ceb','ny','zh-cn','zh-tw','co','hr','cs','da','nl','eo','et','tl','fi','fy','gl','ka','el','gu','ht','ha','haw','he','hi','hmn','hu','is','ig','ga','it','jw','kk','km','kn','ku','ky','lo','la','lv','lt','lb','mk','mg','ms','ml','mt','mi','mr','mn','ne','no','ps','fa','pl','pt','pa','ro','sm','gd','sr','st','sn','sd','si','sk','sl','so','su','sw','sv','tg','ta','te','th','tr','uk','ur','uz','vi','cy','xh','yi','yo','zu']) languageAliases.add(code);
             let targetLang = 'id';
-            let text = '';
-            if (args[0].length === 2) {
-              targetLang = args[0].toLowerCase();
-              text = args.slice(1).join(' ');
-            } else {
-              text = args.join(' ');
+            let text = args.join(' ').trim();
+            const firstArg = String(args[0] || '').toLowerCase();
+            if (languageAliases.has(firstArg) || /^[a-z]{2,3}(?:-[a-z0-9]{2,8})?$/i.test(firstArg)) {
+              targetLang = firstArg;
+              text = args.slice(1).join(' ').trim() || quotedText;
             }
             if (!text) {
-              await sock.sendMessage(sender, { text: '⚠️ Masukkan teks yang ingin diterjemahkan!' }, { quoted: msg });
+              await sock.sendMessage(sender, { text: '⚠️ Tidak ada teks yang bisa diterjemahkan. Sertakan teks atau reply pesan, lalu ketik *.tr*.' }, { quoted: msg });
               break;
             }
             const translated = await translateText(text, targetLang);
