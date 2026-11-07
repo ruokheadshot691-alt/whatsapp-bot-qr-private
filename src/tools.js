@@ -1,29 +1,64 @@
 const crypto = require('crypto');
 
 /**
- * Tanya AI (Dual Engine: UnlimitedAI Reasoning + Pollinations Fast Fallback)
+ * Tanya AI dengan Dukungan Memori Percakapan (Multi-turn Chat)
+ * @param {string} prompt - Pertanyaan saat ini
+ * @param {Array<{role: string, content: string}>} history - Riwayat percakapan sebelumnya
+ * @param {string} userId - ID pengirim untuk sesi AI
  */
-async function askAI(prompt) {
-  // Engine 1: UnlimitedAI (Reasoning model, cerdas & detail)
+async function askAI(prompt, history = [], userId = 'default') {
+  // Engine 1: FreeAIOnline (GPT-4o engine dengan multi-turn messages native)
   try {
-    const chatId = crypto.randomUUID();
-    const body = {
-      chatId,
-      messages: [
-        {
-          id: crypto.randomUUID(),
-          role: 'user',
-          content: prompt,
-          parts: [{ type: 'text', text: prompt }],
-          createdAt: new Date().toISOString()
+    const sRes = await fetch('https://free-ai-online.com/wp-json/mwai/v1/start_session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ botId: 'default' }),
+      signal: AbortSignal.timeout(8000)
+    });
+
+    if (sRes.ok) {
+      const { restNonce } = await sRes.json();
+      const mwaiMessages = history.map((m, idx) => ({
+        id: m.id || ('msg_' + idx),
+        role: m.role,
+        content: m.content
+      }));
+
+      const cRes = await fetch('https://free-ai-online.com/wp-json/mwai-ui/v1/chats/submit', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-WP-Nonce': restNonce
+        },
+        body: JSON.stringify({
+          botId: 'default',
+          chatId: 'wa_' + String(userId).replace(/[^a-zA-Z0-9]/g, '_'),
+          messages: mwaiMessages,
+          newMessage: prompt
+        }),
+        signal: AbortSignal.timeout(25000)
+      });
+
+      if (cRes.ok) {
+        const data = await cRes.json();
+        if (data && data.reply && data.reply.trim()) {
+          return data.reply.trim();
         }
-      ],
-      selectedChatModel: 'chat-model-reasoning',
-      selectedCharacter: null,
-      selectedStory: null,
-      deviceId: crypto.randomUUID(),
-      locale: 'id'
-    };
+      }
+    }
+  } catch (err) {
+    console.warn('[AI Engine 1 Gagal, beralih ke Engine 2]:', err.message);
+  }
+
+  // Engine 2: UnlimitedAI (General model dengan context injection)
+  try {
+    let fullPrompt = prompt;
+    if (history.length > 0) {
+      const historyText = history
+        .map((m) => (m.role === 'user' ? 'User: ' : 'AI: ') + m.content)
+        .join('\n');
+      fullPrompt = `Berikut adalah percakapan kita sebelumnya:\n${historyText}\n\nUser: ${prompt}\nAI:`;
+    }
 
     const res = await fetch('https://app.unlimitedai.chat/api/chat', {
       method: 'POST',
@@ -31,57 +66,44 @@ async function askAI(prompt) {
         'Content-Type': 'application/json',
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify({
+        chatId: crypto.randomUUID(),
+        messages: [
+          {
+            id: crypto.randomUUID(),
+            role: 'user',
+            content: fullPrompt,
+            parts: [{ type: 'text', text: fullPrompt }],
+            createdAt: new Date().toISOString()
+          }
+        ],
+        selectedChatModel: 'chat-model-general',
+        selectedCharacter: null,
+        selectedStory: null,
+        deviceId: crypto.randomUUID(),
+        locale: 'id'
+      }),
       signal: AbortSignal.timeout(20000)
     });
 
     if (res.ok) {
       const text = await res.text();
-      let fullReply = '';
+      let reply = '';
       for (const line of text.split('\n')) {
         const trimmed = line.trim();
         if (!trimmed) continue;
         try {
-          const parsed = JSON.parse(trimmed);
-          if (parsed.type === 'delta' && parsed.delta) {
-            fullReply += parsed.delta;
-          }
+          const p = JSON.parse(trimmed);
+          if (p.type === 'delta' && p.delta) reply += p.delta;
         } catch {}
       }
-      if (fullReply.trim()) {
-        return fullReply.trim();
-      }
-    }
-  } catch (err) {
-    console.warn('[AI Engine 1 Gagal, mencoba Engine 2]:', err.message);
-  }
-
-  // Engine 2: Pollinations POST Fast Engine (Fallback)
-  try {
-    const res2 = await fetch('https://text.pollinations.ai/', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      },
-      body: JSON.stringify({
-        messages: [{ role: 'user', content: prompt }],
-        model: 'openai-fast'
-      }),
-      signal: AbortSignal.timeout(15000)
-    });
-
-    if (res2.ok) {
-      const answer = await res2.text();
-      if (answer && answer.trim()) {
-        return answer.trim();
-      }
+      if (reply.trim()) return reply.trim();
     }
   } catch (err2) {
     console.error('[AI Engine 2 Gagal]:', err2.message);
   }
 
-  throw new Error('Kedua server AI sedang padat, silakan coba kirim ulang pertanyaan kamu.');
+  throw new Error('Server AI sedang padat, silakan coba kirim ulang dalam beberapa detik.');
 }
 
 /**
