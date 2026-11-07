@@ -14,3 +14,7 @@ node_modules-linux-x64.tar.gz
 npm-debug.log*
 .DS_Store
 tmp/
+
+# User-specific AI personas (runtime data)
+data/ai-settings.json
+data/ai-settings.json.tmp
