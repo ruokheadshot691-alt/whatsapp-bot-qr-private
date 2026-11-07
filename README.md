@@ -5,6 +5,8 @@ Bot WhatsApp multifitur dengan sistem otentikasi Scan QR, dilengkapi proteksi An
 ---
 
 ## 🚀 Fitur Utama
+- **`.brat <teks>`** : Membuat stiker teks Brat dengan background putih dan teks hitam (khas album Brat).
+- **`.bratvid <teks>`** : Membuat stiker video/animasi Brat di mana katanya muncul satu per satu hingga selesai.
 - **`.s` / `.sticker`** : Kirim gambar langsung atau balas (*reply*) pesan gambar orang lain untuk diubah menjadi stiker WhatsApp WebP transparan 512x512.
 - **`.hd` / `.remini`** : Kirim atau balas gambar untuk di-upscale / diperjelas menggunakan AI. Dilengkapi fallback sharpening otomatis jika server AI eksternal offline.
 - **`.menu` / `.help`** : Menampilkan daftar lengkap fitur dan cara pakainya.
