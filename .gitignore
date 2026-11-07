@@ -1,0 +1,16 @@
+# WhatsApp Credentials & Session (PENTING: Jangan sampai ter-upload ke publik!)
+session/
+*.session
+creds.json
+auth_info_baileys/
+
+# Dependencies
+node_modules/
+node_modules-linux-x64.tar.gz
+
+# Environment & Temporary files
+.env
+*.log
+npm-debug.log*
+.DS_Store
+tmp/
