@@ -28,6 +28,19 @@ const {
 const userCooldowns = new Map();
 const userMsgCounts = new Map();
 
+// Sesi memori percakapan AI per pengirim (hemat RAM 256MB)
+const aiChatSessions = new Map();
+
+// Bersihkan riwayat AI yang sudah tidak aktif lebih dari 30 menit
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, session] of aiChatSessions.entries()) {
+    if (now - (session.lastActive || 0) > 30 * 60 * 1000) {
+      aiChatSessions.delete(key);
+    }
+  }
+}, 5 * 60 * 1000);
+
 function isCoolingDown(sender) {
   const now = Date.now();
   const lastTime = userCooldowns.get(sender) || 0;
@@ -200,7 +213,8 @@ async function startBot() {
               `• *${config.prefix}s* : Bikin foto jadi stiker WA\n` +
               `• *${config.prefix}toimg* : Reply stiker jadi foto kembali\n` +
               `• *${config.prefix}hd* : Tingkatkan kualitas foto ke HD\n` +
-              `• *${config.prefix}ai <tanya>* : Tanya kecerdasan buatan (AI)\n\n` +
+              `• *${config.prefix}ai <tanya>* : Tanya AI (Mendukung memori percakapan)\n` +
+              `• *${config.prefix}resetai* : Hapus ingatan percakapan AI\n\n` +
               `🛠️ *TOOLS & UTILITAS*\n` +
               `• *${config.prefix}qr <teks/link>* : Buat gambar QR Code\n` +
               `• *${config.prefix}tr <kode> <teks>* : Terjemahan bahasa (.tr en halo)\n` +
@@ -341,16 +355,83 @@ async function startBot() {
           case 'ai':
           case 'ask':
           case 'tanya': {
-            const prompt = args.join(' ');
+            const prompt = args.join(' ').trim();
             if (!prompt) {
-              await sock.sendMessage(sender, { text: '⚠️ Masukkan pertanyaan untuk AI. Contoh: .ai jelaskan teori relativitas secara singkat' }, { quoted: msg });
+              await sock.sendMessage(
+                sender,
+                {
+                  text: '🤖 *Tanya AI (Dengan Memori)*\n\n' +
+                        'Bot mengingat percakapan sebelumnya dalam sesi Anda.\n\n' +
+                        'Contoh:\n' +
+                        '• *.ai halo, nama saya Fatih*\n' +
+                        '• *.ai siapa nama saya?*\n' +
+                        '• *.ai reset* (atau *.resetai* untuk menghapus ingatan)'
+                },
+                { quoted: msg }
+              );
               break;
             }
+
+            if (prompt.toLowerCase() === 'reset' || prompt.toLowerCase() === 'clear') {
+              aiChatSessions.delete(sender);
+              await sock.sendMessage(
+                sender,
+                {
+                  text: '🧹 *Memori AI Berhasil Direset!*\n\nRiwayat percakapan sebelumnya telah dihapus. Kamu bisa memulai obrolan baru.'
+                },
+                { quoted: msg }
+              );
+              break;
+            }
+
             await sock.sendMessage(sender, { text: '💭 Sedang berpikir...' }, { quoted: msg });
-            const answer = await askAI(prompt);
-            await sock.sendMessage(sender, { text: `🤖 *Jawaban AI:*\n\n${answer}` }, { quoted: msg });
+
+            // Ambil sesi memori user
+            const session = aiChatSessions.get(sender) || { history: [], lastActive: Date.now() };
+            session.lastActive = Date.now();
+
+            try {
+              const answer = await askAI(prompt, session.history, sender);
+
+              // Simpan giliran obrolan ke riwayat memori (maksimal 10 pesan terakhir)
+              session.history.push({ role: 'user', content: prompt });
+              session.history.push({ role: 'assistant', content: answer });
+              if (session.history.length > 10) {
+                session.history = session.history.slice(-10);
+              }
+              aiChatSessions.set(sender, session);
+
+              await sock.sendMessage(
+                sender,
+                {
+                  text: `🤖 *Jawaban AI:*\n\n${answer}\n\n_💡 Ketik *.ai reset* untuk menghapus ingatan obrolan._`
+                },
+                { quoted: msg }
+              );
+            } catch (err) {
+              console.error('[AI Handler Error]:', err.message);
+              await sock.sendMessage(
+                sender,
+                { text: `⚠️ ${err.message || 'Gagal menghubungi server AI.'}` },
+                { quoted: msg }
+              );
+            }
             break;
           }
+
+          case 'resetai':
+          case 'cleari': {
+            aiChatSessions.delete(sender);
+            await sock.sendMessage(
+              sender,
+              {
+                text: '🧹 *Memori AI Berhasil Direset!*\n\nRiwayat percakapan sebelumnya telah dihapus. Kamu bisa memulai percakapan baru dengan *.ai*.'
+              },
+              { quoted: msg }
+            );
+            break;
+          }
+
 
           // ------------------ TOOLS & UTILITAS ------------------
           case 'qr':
