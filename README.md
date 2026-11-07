@@ -57,3 +57,18 @@ Bot WhatsApp multifitur dengan sistem otentikasi Scan QR, dilengkapi proteksi An
    node index.js
    ```
 5. Scan QR di console panel hosting.
+
+
+---
+
+## 💻 Fitur Console Panel (bot-hosting.net)
+Kamu bisa mengetik langsung di kotak terminal / console panel server untuk mengirim pesan tanpa perlu chat dari WA:
+* `send <nomor/grup> <pesan>` : Kirim pesan ke nomor tujuan atau grup.
+  * Contoh: `send 081234567890 Halo dari console!`
+  * Contoh: `send 1203630234567890@g.us Halo semua anggota grup!`
+  * Contoh: `send me Catatan untuk nomor bot sendiri`
+  * Contoh: `send owner Halo owner!`
+* `<nomor> <pesan>` (shortcut): Langsung ketik nomor dan pesannya (misal: `081234567890 Tes pesan cepat`).
+* `status` : Cek status koneksi bot, nomor aktif, uptime, dan penggunaan RAM container.
+* `eval <kode>` : Menjalankan cuplikan kode JavaScript langsung di runtime server.
+* `help` : Menampilkan ringkasan panduan console.
