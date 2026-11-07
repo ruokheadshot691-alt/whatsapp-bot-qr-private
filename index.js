@@ -1,3 +1,4 @@
+const readline = require('readline');
 const {
   default: makeWASocket,
   useMultiFileAuthState,
@@ -142,6 +143,156 @@ async function getMediaBuffer(mediaMsg, type = 'image') {
   return buffer;
 }
 
+
+// Global reference untuk bot socket aktif agar bisa diakses oleh Console CLI
+let currentSock = null;
+
+function normalizeConsoleJid(rawTarget) {
+  if (!rawTarget) return null;
+  let target = rawTarget.trim();
+
+  // Keyword 'me' atau 'self' -> nomor bot sendiri
+  if (target.toLowerCase() === 'me' || target.toLowerCase() === 'self') {
+    if (currentSock?.user?.id) {
+      const myNumber = currentSock.user.id.split(':')[0].split('@')[0];
+      return myNumber + '@s.whatsapp.net';
+    }
+    return config.ownerNumber ? config.ownerNumber.replace(/[^0-9]/g, '') + '@s.whatsapp.net' : null;
+  }
+
+  // Keyword 'owner' -> nomor owner di config
+  if (target.toLowerCase() === 'owner') {
+    return config.ownerNumber ? config.ownerNumber.replace(/[^0-9]/g, '') + '@s.whatsapp.net' : null;
+  }
+
+  // Jika sudah memiliki suffix JID WhatsApp (@s.whatsapp.net, @g.us, @lid)
+  if (target.includes('@')) {
+    return target;
+  }
+
+  // Bersihkan karakter non-angka
+  let cleanNumber = target.replace(/[^0-9]/g, '');
+  if (!cleanNumber) return null;
+
+  // Format 08xx -> 628xx
+  if (cleanNumber.startsWith('08')) {
+    cleanNumber = '62' + cleanNumber.slice(1);
+  }
+
+  return cleanNumber + '@s.whatsapp.net';
+}
+
+function setupConsoleCLI() {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+    terminal: false
+  });
+
+  rl.on('line', async (line) => {
+    const raw = line.trim();
+    if (!raw) return;
+
+    const parts = raw.split(/\s+/);
+    const cmd = parts[0].toLowerCase();
+
+    if (cmd === 'help' || cmd === 'menu') {
+      console.log('\n================== PANDUAN CONSOLE BOT-HOSTING ==================');
+      console.log('1. Kirim pesan ke nomor/grup WhatsApp:');
+      console.log('   send <nomor/grup> <pesan>');
+      console.log('   Contoh: send 081234567890 Halo dari console panel!');
+      console.log('   Contoh: send 1203630234567890@g.us Halo semua anggota grup!');
+      console.log('   Contoh: send me Ini catatan buat nomor bot sendiri');
+      console.log('   Contoh: send owner Halo owner!');
+      console.log('2. Shortcut cepat (langsung ketik nomor lalu pesan):');
+      console.log('   081234567890 Halo apa kabar?');
+      console.log('3. Cek status & pemakaian RAM container:');
+      console.log('   status');
+      console.log('4. Eksekusi kode JS (debug):');
+      console.log('   eval <kode>');
+      console.log('5. Tampilkan bantuan ini:');
+      console.log('   help');
+      console.log('===================================================================\n');
+      return;
+    }
+
+    if (cmd === 'status') {
+      const isConnected = !!(currentSock && currentSock.user);
+      const botNum = currentSock?.user?.id ? currentSock.user.id.split(':')[0] : 'Belum login';
+      const uptimeSec = Math.floor(process.uptime());
+      const hours = Math.floor(uptimeSec / 3600);
+      const mins = Math.floor((uptimeSec % 3600) / 60);
+      const memRss = Math.round(process.memoryUsage().rss / 1024 / 1024);
+      const memHeap = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
+      console.log(`[Status Console] Terhubung: ${isConnected ? 'YA (Aktif)' : 'TIDAK'} | Nomor: ${botNum} | Uptime: ${hours}j ${mins}m | RAM: ${memRss}MB (Heap: ${memHeap}MB)`);
+      return;
+    }
+
+    if (cmd === 'eval') {
+      const code = parts.slice(1).join(' ').trim();
+      if (!code) {
+        console.log('⚠️ [Console] Masukkan kode JavaScript untuk di-eval.');
+        return;
+      }
+      try {
+        const result = eval(code);
+        console.log('➡️ [Eval Result]:', result);
+      } catch (err) {
+        console.error('❌ [Eval Error]:', err.message);
+      }
+      return;
+    }
+
+    if (!currentSock || !currentSock.user) {
+      console.log('⚠️ [Console] Bot belum terhubung ke WhatsApp. Tunggu hingga login selesai atau scan QR.');
+      return;
+    }
+
+    let targetRaw = '';
+    let messageText = '';
+
+    if (['send', 'kirim', 'msg', 'say'].includes(cmd)) {
+      targetRaw = parts[1];
+      messageText = parts.slice(2).join(' ').trim();
+    } else if (cmd === 'me' || cmd === 'self') {
+      targetRaw = 'me';
+      messageText = parts.slice(1).join(' ').trim();
+    } else if (cmd === 'owner') {
+      targetRaw = 'owner';
+      messageText = parts.slice(1).join(' ').trim();
+    } else if (parts[0].match(/^(08|62|\+62|[0-9]{8,20}|.*@g\.us|.*@s\.whatsapp\.net|.*@lid)/i)) {
+      targetRaw = parts[0];
+      messageText = parts.slice(1).join(' ').trim();
+    } else {
+      console.log(`⚠️ [Console] Perintah "${cmd}" tidak dikenal. Ketik "help" untuk bantuan.`);
+      return;
+    }
+
+    if (!targetRaw || !messageText) {
+      console.log('⚠️ [Console] Format salah. Contoh: send 081234567890 Halo ini pesan dari console');
+      return;
+    }
+
+    const jid = normalizeConsoleJid(targetRaw);
+    if (!jid) {
+      console.log(`⚠️ [Console] Nomor tujuan "${targetRaw}" tidak valid.`);
+      return;
+    }
+
+    try {
+      console.log(`⏳ [Console] Mengirim pesan ke ${jid}...`);
+      await currentSock.sendMessage(jid, { text: messageText });
+      console.log(`✅ [Console Sukses] Pesan terkirim ke ${jid}: "${messageText}"`);
+    } catch (err) {
+      console.error(`❌ [Console Gagal] Tidak dapat mengirim pesan ke ${jid}:`, err.message);
+    }
+  });
+
+  rl.on('error', (err) => {
+    console.error('[Console CLI Error]:', err.message);
+  });
+}
+
 async function startBot() {
   const sessionDir = path.resolve('./session');
   fs.mkdirSync(sessionDir, { recursive: true, mode: 0o700 });
@@ -171,6 +322,7 @@ async function startBot() {
     }
 
     if (connection === 'close') {
+      currentSock = null;
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
       console.log(`Koneksi terputus (status: ${statusCode}). Reconnecting: ${shouldReconnect}`);
@@ -180,8 +332,13 @@ async function startBot() {
         console.log('Sesi logout. Hapus folder ./session dan scan QR ulang.');
       }
     } else if (connection === 'open') {
+      currentSock = sock;
       console.log('========================================');
       console.log('✅ Bot WhatsApp Berhasil Terhubung & Aktif!');
+      console.log('💡 [Console Panel Aktif] Ketik langsung di console bot-hosting:');
+      console.log('   send <nomor/grup> <pesan>');
+      console.log('   Contoh: send 081234567890 Halo dari console!');
+      console.log('   Ketik "help" untuk daftar perintah console.');
       console.log('========================================');
     }
   });
@@ -850,4 +1007,5 @@ async function startBot() {
   });
 }
 
+setupConsoleCLI();
 startBot();
