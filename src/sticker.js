@@ -20,4 +20,18 @@ async function makeSticker(imageBuffer) {
   }
 }
 
-module.exports = { makeSticker };
+/**
+ * Mengonversi buffer stiker WebP kembali menjadi buffer gambar JPEG/PNG
+ */
+async function stickerToImage(webpBuffer) {
+  try {
+    const imgBuffer = await sharp(webpBuffer)
+      .jpeg({ quality: 90 })
+      .toBuffer();
+    return imgBuffer;
+  } catch (err) {
+    throw new Error('Gagal mengonversi stiker ke gambar: ' + err.message);
+  }
+}
+
+module.exports = { makeSticker, stickerToImage };
