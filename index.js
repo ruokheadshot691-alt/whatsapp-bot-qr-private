@@ -1567,6 +1567,80 @@ function setupAutoBashIntegration() {
   }
 }
 
+
+const KNOWN_COMMANDS = new Set([
+  "menu", "help", "brat", "bratwhite", "bratvid", "bratvideo", "bratgif", "bratv",
+  "qc", "smeme", "ttp", "attp", "tts", "bass", "slow", "chipmunk", "robot",
+  "tt", "tiktok", "pin", "img", "pinterest", "ssweb", "screenshot", "gempa",
+  "menfess", "confess", "tebakkata", "s", "sticker", "toimg", "hd", "remini",
+  "ai", "ask", "tanya", "persona", "setpersona", "mypersona", "resetai", "cleari",
+  "qr", "qrcode", "tr", "translate", "wiki", "wikipedia", "short", "shortlink",
+  "cuaca", "weather", "calc", "sholat", "jadwalsholat", "surah", "quran",
+  "dadu", "koin", "apakah", "siapakah", "rate", "kick", "remove", "promote",
+  "demote", "mute", "unmute", "tagall", "hidetag", "linkgroup", "linkgc",
+  "setname", "setdesc", "groupinfo", "ping", "owner", "runtime"
+]);
+
+function createMessageCaptureSocket(sock) {
+  const capturedReplies = [];
+  const handler = {
+    get(target, prop, receiver) {
+      if (prop === "sendMessage") {
+        return async (dest, content, options) => {
+          const res = await target.sendMessage(dest, content, options);
+          if (res?.key?.id && res?.message) {
+            storeMessage(res.key.id, res.message);
+          }
+          let summary = "";
+          if (typeof content === "string") {
+            summary = content;
+          } else if (content?.text) {
+            summary = content.text;
+          } else if (content?.caption) {
+            summary = content.caption;
+          } else if (content?.sticker) {
+            summary = "[Stiker WebP terkirim ke WhatsApp]";
+          } else if (content?.image) {
+            summary = "[Foto/Gambar terkirim ke WhatsApp]";
+          } else if (content?.video) {
+            summary = "[Video terkirim ke WhatsApp]";
+          } else if (content?.audio) {
+            summary = "[Audio/Voice Note terkirim ke WhatsApp]";
+          } else {
+            summary = "[Media terkirim ke WhatsApp]";
+          }
+          if (summary) capturedReplies.push(summary);
+          return res;
+        };
+      }
+      const val = Reflect.get(target, prop, target);
+      if (typeof val === "function") {
+        return val.bind(target);
+      }
+      return val;
+    }
+  };
+  return {
+    wrapped: new Proxy(sock, handler),
+    capturedReplies
+  };
+}
+
+function getMeaningfulReply(replies) {
+  if (!replies || replies.length === 0) return "";
+  if (replies.length === 1) return replies[0];
+  const filtered = replies.filter(r => {
+    const trimmed = (r || "").trim();
+    return !trimmed.startsWith("💭 Sedang berpikir") &&
+           !trimmed.startsWith("⏳ Sedang") &&
+           !trimmed.startsWith("⏳ Mohon tunggu");
+  });
+  if (filtered.length > 0) {
+    return filtered.join("\n\n");
+  }
+  return replies.join("\n\n");
+}
+
 function setupConsoleCLI() {
   const rl = readline.createInterface({
     input: process.stdin,
@@ -1683,19 +1757,39 @@ function setupConsoleCLI() {
       console.log(`✅ [Console Sukses] Pesan terkirim ke ${destDesc}: "${messageText}"`);
 
       // Jika pesan adalah command bot (.menu, .ping, dll), eksekusi otomatis
-      if (messageText.startsWith(config.prefix)) {
+      let isCmd = messageText.startsWith(config.prefix);
+      let cmdName = "";
+      if (isCmd) {
+        cmdName = messageText.slice(config.prefix.length).trim().split(/\s+/)[0].toLowerCase();
+      } else {
+        const firstWord = messageText.trim().split(/\s+/)[0].toLowerCase();
+        if (KNOWN_COMMANDS.has(firstWord)) {
+          isCmd = true;
+          cmdName = firstWord;
+          messageText = config.prefix + messageText.trim();
+        }
+      }
+
+      if (isCmd) {
         console.log(`⚙️ [Console Command] Menjalankan perintah "${messageText}" untuk ${destDesc}...`);
-        handleBotCommand(currentSock, {
-          sender: jid,
-          bodyText: messageText,
-          msg: sent,
-          rawMsg: unwrapMessage(sent),
-          isFromMe: true,
-          userKey: currentSock.user?.id || jid,
-          isConsole: true
-        }).catch(err => {
+        const capture = createMessageCaptureSocket(currentSock);
+        try {
+          await handleBotCommand(capture.wrapped, {
+            sender: jid,
+            bodyText: messageText,
+            msg: sent,
+            rawMsg: unwrapMessage(sent),
+            isFromMe: true,
+            userKey: currentSock.user?.id || jid,
+            isConsole: true
+          });
+          const replyText = getMeaningfulReply(capture.capturedReplies);
+          if (replyText) {
+            console.log(`\n${cmdName}: ${replyText}\n`);
+          }
+        } catch (err) {
           console.error(`❌ [Console Command Error]:`, err.message);
-        });
+        }
       }
     } catch (err) {
       console.error(`❌ [Console Gagal] Tidak dapat mengirim pesan ke ${destDesc}:`, err.message);
@@ -1758,20 +1852,44 @@ function setupConsoleCLI() {
             }
             console.log(`✅ [Terminal/CLI Sukses] Pesan terkirim ke ${destDesc}: "${messageText}"`);
 
-            const isCmd = messageText.startsWith(config.prefix);
+            let isCmd = messageText.startsWith(config.prefix);
+            let cmdName = "";
+            if (isCmd) {
+              cmdName = messageText.slice(config.prefix.length).trim().split(/\s+/)[0].toLowerCase();
+            } else {
+              const firstWord = messageText.trim().split(/\s+/)[0].toLowerCase();
+              if (KNOWN_COMMANDS.has(firstWord)) {
+                isCmd = true;
+                cmdName = firstWord;
+                messageText = config.prefix + messageText.trim();
+              }
+            }
+
+            let replyText = "";
+            let capturedReplies = [];
+
             if (isCmd) {
               console.log(`⚙️ [Terminal Command] Menjalankan perintah "${messageText}" untuk ${destDesc}...`);
-              handleBotCommand(currentSock, {
-                sender: jid,
-                bodyText: messageText,
-                msg: sent,
-                rawMsg: unwrapMessage(sent),
-                isFromMe: true,
-                userKey: currentSock.user?.id || jid,
-                isConsole: true
-              }).catch(err => {
+              const capture = createMessageCaptureSocket(currentSock);
+              try {
+                await handleBotCommand(capture.wrapped, {
+                  sender: jid,
+                  bodyText: messageText,
+                  msg: sent,
+                  rawMsg: unwrapMessage(sent),
+                  isFromMe: true,
+                  userKey: currentSock.user?.id || jid,
+                  isConsole: true
+                });
+                capturedReplies = capture.capturedReplies;
+                replyText = getMeaningfulReply(capturedReplies);
+                if (replyText) {
+                  console.log(`💬 [Console Output ${cmdName}]:\n${cmdName}: ${replyText}`);
+                }
+              } catch (err) {
                 console.error(`❌ [Terminal Command Error]:`, err.message);
-              });
+                replyText = `❌ Error: ${err.message}`;
+              }
             }
 
             res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -1780,7 +1898,10 @@ function setupConsoleCLI() {
               jid,
               message: messageText,
               isSelf: check.isSelf,
-              isCommand: isCmd
+              isCommand: isCmd,
+              command: cmdName,
+              replyText: replyText,
+              replies: capturedReplies
             }));
           } catch (err) {
             console.error(`❌ [Terminal/CLI Gagal] Gagal kirim ke ${destDesc}:`, err.message);
