@@ -14,6 +14,7 @@ const path = require('path');
 const config = require('./config');
 const { makeSticker, stickerToImage } = require('./src/sticker');
 const { makeBratSticker, makeBratVideoSticker } = require('./src/brat');
+const { printPterodactylBanner } = require('./src/banner');
 const {
   makeQcSticker,
   makeSmemeSticker,
@@ -1546,4 +1547,5 @@ async function startBot() {
 }
 
 setupConsoleCLI();
+printPterodactylBanner();
 startBot();
