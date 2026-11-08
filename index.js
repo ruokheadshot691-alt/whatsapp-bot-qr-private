@@ -164,6 +164,136 @@ async function getMediaBuffer(mediaMsg, type = 'image') {
 }
 
 
+// ============================================================
+//  FITUR: VIEW-ONCE UNLIMITED (foto/audio/video sekali lihat)
+//  + ANTI-DELETE (pesan yang dihapus tetap terlihat)
+// ============================================================
+
+const VIEWONCE_ENABLED = true;   // false = matikan republikasi view-once
+const ANTIDELETE_ENABLED = true; // false = matikan republikasi pesan terhapus
+
+// Cache pesan masuk untuk tingkatan anti-delete (in-memory, terakhir 600)
+const MSG_CACHE = new Map(); // key `${remoteJid}|${id}` -> msg mentah
+const MSG_CACHE_MAX = 600;
+
+function cacheMessage(msg) {
+  if (!msg?.key?.id) return;
+  const cacheKey = `${msg.key.remoteJid}|${msg.key.id}`;
+  MSG_CACHE.set(cacheKey, msg);
+  if (MSG_CACHE.size > MSG_CACHE_MAX) {
+    const oldest = MSG_CACHE.keys().next().value;
+    MSG_CACHE.delete(oldest);
+  }
+}
+
+function findCacheKey(key) {
+  if (!key?.id) return null;
+  const primary = `${key.remoteJid || ''}|${key.id}`;
+  if (MSG_CACHE.has(primary)) return primary;
+  // fallback: kadang remoteJid berbeda (grup vs chat) -> scan by id
+  for (const k of MSG_CACHE.keys()) {
+    if (k.endsWith(`|${key.id}`)) return k;
+  }
+  return null;
+}
+
+const VIEWONCE_KEYS = ['viewOnceMessage', 'viewOnceMessageV2', 'viewOnceMessageV2Extension'];
+
+function getViewOnceInner(msg) {
+  for (const k of VIEWONCE_KEYS) {
+    const inner = msg.message?.[k]?.message;
+    if (inner) return inner;
+  }
+  return null;
+}
+
+// Kirim ulang media "diselamatkan" ke chat
+async function sendRescuedMedia(sock, chat, inner, caption, quotedMsg) {
+  const kind = inner.imageMessage ? 'image' : inner.videoMessage ? 'video'
+    : inner.documentMessage ? 'document' : inner.audioMessage ? 'audio' : null;
+  if (!kind) return false;
+
+  const part = inner.imageMessage || inner.videoMessage ||
+    inner.audioMessage || inner.documentMessage;
+  const buf = await getMediaBuffer(part, kind);
+
+  if (kind === 'image') {
+    await sock.sendMessage(chat, { image: buf, caption }, { quoted: quotedMsg });
+  } else if (kind === 'video') {
+    await sock.sendMessage(chat, { video: buf, caption }, { quoted: quotedMsg });
+  } else if (kind === 'audio') {
+    await sock.sendMessage(chat, {
+      audio: buf,
+      ptt: true,
+      mimetype: part.mimetype || 'audio/mp4',
+    }, { quoted: quotedMsg });
+  } else {
+    await sock.sendMessage(chat, {
+      document: buf,
+      mimetype: part.mimetype || 'application/octet-stream',
+      fileName: part.fileName || 'file.pdf',
+    }, { quoted: quotedMsg });
+  }
+  return true;
+}
+
+// Re-publish pesan view-once: media rerouter sebagai pesan biasa (bebas dibuka)
+async function replayViewOnce(sock, msg) {
+  if (!VIEWONCE_ENABLED) return;
+  const inner = getViewOnceInner(msg);
+  if (!inner) return;
+
+  const chat = msg.key.remoteJid;
+  const pelaku = msg.pushName || msg.key.participant || chat;
+  const ok = await sendRescuedMedia(
+    sock, chat, inner,
+    `🔓 *VIEW-ONCE BEBAS*\n_Dari: ${pelaku}\nSekali lihat? Sekarang bisa dibuka berkali-kali._`,
+    msg
+  );
+
+  if (ok) console.log(`[Anti-VO] view-once dari ${pelaku} berhasil direp` + 'lay');
+}
+
+// Re-publish pesan yang dihapus (protocolMessage REVOKE)
+async function replayDeleted(sock, revokeMsg) {
+  if (!ANTIDELETE_ENABLED) return;
+  const pm = revokeMsg.message?.protocolMessage;
+  if (!pm?.key) return;
+
+  const cacheKey = findCacheKey(pm.key);
+  if (!cacheKey) return; // pesan lama sebelum bot online -> tak ada cache
+
+  const originalMsg = MSG_CACHE.get(cacheKey);
+  const chat = pm.key.remoteJid || originalMsg.key.remoteJid;
+  if (chat === 'status@broadcast') return;
+
+  const rawMsg = unwrapMessage(originalMsg);
+  if (!rawMsg) return;
+
+  const pelaku = originalMsg.pushName || originalMsg.key.participant || chat;
+  const waktu = originalMsg.messageTimestamp
+    ? new Date(Number(originalMsg.messageTimestamp) * 1000).toLocaleString('id-ID')
+    : '';
+
+  const header =
+    `🗑️ *ANTI-DELETE*\n` +
+    `_Pesan dari *${pelaku}* dihapus, tapi bot menyimpannya:_` +
+    (waktu ? `\n⏰ ${waktu}` : '');
+
+  // Teks biasa
+  const teksHapus = rawMsg.conversation || rawMsg.extendedTextMessage?.text
+    || rawMsg.imageMessage?.caption || rawMsg.videoMessage?.caption;
+  if (teksHapus) {
+    await sock.sendMessage(chat, { text: `${header}\n\n💬 ${teksHapus}` }, { quoted: revokeMsg });
+    console.log(`[Anti-Del] teks terhapus dari ${pelaku} direplay`);
+    return;
+  }
+
+  // Media (foto/video/audio/dokumen)
+  const ok = await sendRescuedMedia(sock, chat, rawMsg, header, revokeMsg);
+  if (ok) console.log(`[Anti-Del] media terhapus dari ${pelaku} direplay`);
+}
+
 // Global reference untuk bot socket aktif agar bisa diakses oleh Console CLI
 let currentSock = null;
 
@@ -559,6 +689,18 @@ async function startBot() {
       if (!msg.message) continue;
       if (msg.key.remoteJid === 'status@broadcast') continue;
 
+      // ---- FITUR: ANTI-DELETE + VIEW-ONCE (otomatis) ----
+      cacheMessage(msg); // simpan dulu semua pesan utk anti-delete
+      const revokePM = msg.message.protocolMessage
+        || (msg.message.ephemeralMessage?.message?.protocolMessage);
+      if (revokePM) {
+        await replayDeleted(sock, msg).catch((e) =>
+          console.log('[Anti-Del]', e.message));
+        continue; // pesan sistem revoke -> jangan masuk router perintah
+      }
+      await replayViewOnce(sock, msg).catch((e) =>
+        console.log('[Anti-VO]', e.message));
+
       const rawMsg = unwrapMessage(msg);
       if (!rawMsg) continue;
 
@@ -674,6 +816,10 @@ async function startBot() {
               `• *${config.prefix}short <link>* : Buat shortlink TinyURL\n` +
               `• *${config.prefix}cuaca <kota>* : Cek cuaca & suhu kota realtime\n` +
               `• *${config.prefix}calc <angka>* : Kalkulator (${config.prefix}calc 25*40)\n\n` +
+              `🔓 *FITUR RAHASIA (OTOMATIS)*\n` +
+              `• *View-once unlimited* : foto audio video "sekali lihat" langsung direplay bot, bebas dibuka berkali-kali\n` +
+              `• *Anti-delete* : pesan yang dihapus (teks/foto/video/audio) tetap ditampilkan bot\n` +
+              `• Fitur jalan otomatis, tidak perlu perintah apapun 🤫\n\n` +
               `🕌 *ISLAMI*\n` +
               `• *${config.prefix}sholat <kota>* : Jadwal sholat harian akurat\n` +
               `• *${config.prefix}surah <1-114>* : Info surah Al-Qur'an lengkap\n\n` +
