@@ -6,7 +6,8 @@ const {
   DisconnectReason,
   downloadContentFromMessage,
   fetchLatestBaileysVersion,
-  Browsers
+  Browsers,
+  makeCacheableSignalKeyStore
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const qrcode = require('qrcode-terminal');
@@ -172,15 +173,33 @@ async function getMediaBuffer(mediaMsg, type = 'image') {
 const VIEWONCE_ENABLED = true;   // false = matikan republikasi view-once
 const ANTIDELETE_ENABLED = true; // false = matikan republikasi pesan terhapus
 
-// Cache pesan masuk untuk tingkatan anti-delete (in-memory, terakhir 600)
-const MSG_CACHE = new Map(); // key `${remoteJid}|${id}` -> msg mentah
-const MSG_CACHE_MAX = 600;
+// Cache retry pesan (mengatasi 'Menunggu pesan ini' saat pertukaran kunci enkripsi Signal)
+const msgRetryCounterMap = new Map();
+const msgRetryCounterCache = {
+  get: (key) => msgRetryCounterMap.get(key),
+  set: (key, value) => {
+    msgRetryCounterMap.set(key, value);
+    if (msgRetryCounterMap.size > 2000) {
+      const first = msgRetryCounterMap.keys().next().value;
+      msgRetryCounterMap.delete(first);
+    }
+  },
+  del: (key) => msgRetryCounterMap.delete(key),
+  delete: (key) => msgRetryCounterMap.delete(key),
+  has: (key) => msgRetryCounterMap.has(key),
+};
+
+// Cache pesan masuk dan keluar untuk anti-delete dan retry dekripsi
+const MSG_CACHE = new Map(); // key `${remoteJid}|${id}` atau `id:${id}` -> msg mentah
+const MSG_CACHE_MAX = 2000;
 
 function cacheMessage(msg) {
   if (!msg?.key?.id) return;
-  const cacheKey = `${msg.key.remoteJid}|${msg.key.id}`;
+  const remote = msg.key.remoteJid || '';
+  const cacheKey = `${remote}|${msg.key.id}`;
   MSG_CACHE.set(cacheKey, msg);
-  if (MSG_CACHE.size > MSG_CACHE_MAX) {
+  MSG_CACHE.set(`id:${msg.key.id}`, msg);
+  if (MSG_CACHE.size > MSG_CACHE_MAX * 2) {
     const oldest = MSG_CACHE.keys().next().value;
     MSG_CACHE.delete(oldest);
   }
@@ -190,7 +209,8 @@ function findCacheKey(key) {
   if (!key?.id) return null;
   const primary = `${key.remoteJid || ''}|${key.id}`;
   if (MSG_CACHE.has(primary)) return primary;
-  // fallback: kadang remoteJid berbeda (grup vs chat) -> scan by id
+  const byId = `id:${key.id}`;
+  if (MSG_CACHE.has(byId)) return byId;
   for (const k of MSG_CACHE.keys()) {
     if (k.endsWith(`|${key.id}`)) return k;
   }
@@ -370,7 +390,11 @@ async function validateAndResolveJid(sock, targetRaw) {
             error: `Nomor ${displayNum} (${targetRaw}) TIDAK terdaftar di WhatsApp!`
           };
         }
-        return { valid: true, jid: results[0].jid || jid, exists: true };
+        let cleanJid = results[0]?.jid || jid;
+        if (cleanJid.includes(':')) {
+          cleanJid = cleanJid.split(':')[0] + '@s.whatsapp.net';
+        }
+        return { valid: true, jid: cleanJid, exists: true };
       }
     } catch (err) {
       console.warn('[onWhatsApp Check Warning]:', err.message);
@@ -636,15 +660,53 @@ async function startBot() {
 
   console.log(`Menghubungkan WhatsApp Bot v${version.join('.')}...`);
 
+  const pinoLogger = pino({ level: 'silent' });
+  const authKeys = typeof makeCacheableSignalKeyStore === 'function'
+    ? makeCacheableSignalKeyStore(state.keys, pinoLogger)
+    : state.keys;
+
   const sock = makeWASocket({
     version,
-    logger: pino({ level: 'silent' }),
+    logger: pinoLogger,
     printQRInTerminal: false,
-    auth: state,
+    auth: {
+      creds: state.creds,
+      keys: authKeys,
+    },
+    msgRetryCounterCache,
+    getMessage: async (key) => {
+      if (!key?.id) return undefined;
+      const cacheKey = findCacheKey(key);
+      if (cacheKey) {
+        const cached = MSG_CACHE.get(cacheKey);
+        if (cached?.message) {
+          return cached.message;
+        }
+      }
+      return undefined;
+    },
     browser: Browsers.macOS('Desktop'),
     syncFullHistory: false,
-    markOnlineOnConnect: false
+    markOnlineOnConnect: false,
+    defaultQueryTimeoutMs: 60000,
   });
+
+  // Intercept sendMessage agar semua pesan terkirim otomatis tersimpan di MSG_CACHE.
+  // Dengan ini, saat WhatsApp penerima minta retry (resend) karena enkripsi belum sinkron,
+  // Baileys otomatis merespons lewat getMessage dan pesan langsung terbuka (tidak stuck "menunggu pesan ini").
+  const rawSendMessage = sock.sendMessage.bind(sock);
+  sock.sendMessage = async (jid, content, options = {}) => {
+    try {
+      if (typeof sock.sendPresenceUpdate === 'function' && !jid.endsWith('@g.us')) {
+        await sock.sendPresenceUpdate('composing', jid).catch(() => {});
+      }
+    } catch {}
+    const res = await rawSendMessage(jid, content, options);
+    if (res) {
+      cacheMessage(res);
+    }
+    return res;
+  };
 
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
