@@ -5,7 +5,9 @@
  * Berkomunikasi dengan bot yang sedang aktif via local HTTP IPC (port 45678).
  *
  * Contoh penggunaan:
- *   send me Halo pesan untuk nomor bot sendiri!
+ *   send me .menu
+ *   send me .ping
+ *   send me .ai siapa penemu internet?
  *   send 085281929641 Halo apa kabar!
  *   ./send 085281929641 Halo apa kabar!
  *   node send.js 085281929641 Halo apa kabar!
@@ -16,11 +18,13 @@ const http = require('http');
 const args = process.argv.slice(2);
 if (args.length < 2) {
   console.log('⚠️ Format penggunaan salah!');
-  console.log('   send <nomor/target> <pesan>');
+  console.log('   send <nomor/target> <pesan/command>');
   console.log('Contoh:');
-  console.log('   send me Halo ini catatan untuk bot sendiri');
+  console.log('   send me .menu                        (Tampilkan menu bot ke WA sendiri)');
+  console.log('   send me .ping                        (Cek kecepatan respon bot)');
+  console.log('   send me .ai siapa penemu internet?   (Tanya AI)');
   console.log('   send 085281929641 Halo ini pesan dari console!');
-  console.log('   send 1203630234567890@g.us Halo semua anggota grup!');
+  console.log('   send 1203630234567890@g.us .menu     (Kirim menu ke grup)');
   console.log('   send owner Halo owner bot!');
   process.exit(1);
 }
@@ -49,6 +53,9 @@ const req = http.request({
       if (resp.success) {
         const dest = resp.isSelf ? `${resp.jid} (Nomor Sendiri)` : (resp.jid || target);
         console.log(`✅ [Sukses Terkirim] Pesan ke ${dest}: "${message}"`);
+        if (resp.isCommand) {
+          console.log(`⚙️ [Command Diproses] Perintah bot "${message}" otomatis dieksekusi oleh bot!`);
+        }
       } else {
         console.error(`❌ [Gagal Mengirim]: ${resp.error || 'Terjadi kesalahan'}`);
       }
