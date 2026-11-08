@@ -202,6 +202,57 @@ function normalizeConsoleJid(rawTarget) {
   return cleanNumber + '@s.whatsapp.net';
 }
 
+async function validateAndResolveJid(sock, targetRaw) {
+  if (!targetRaw) {
+    return { valid: false, error: 'Target nomor atau grup wajib diisi.' };
+  }
+
+  let jid = normalizeConsoleJid(targetRaw);
+  if (!jid) {
+    return { valid: false, error: `Format nomor/target "${targetRaw}" tidak valid.` };
+  }
+
+  if (!sock) {
+    return { valid: false, error: 'Koneksi WhatsApp bot belum siap.' };
+  }
+
+  // Jika target adalah grup (@g.us)
+  if (jid.endsWith('@g.us')) {
+    try {
+      if (typeof sock.groupMetadata === 'function') {
+        await sock.groupMetadata(jid);
+      }
+      return { valid: true, jid, isGroup: true };
+    } catch (err) {
+      return { valid: false, error: `Grup ${jid} tidak ditemukan atau bot bukan anggota grup tersebut.` };
+    }
+  }
+
+  // Jika target adalah nomor perorangan (@s.whatsapp.net)
+  if (jid.endsWith('@s.whatsapp.net')) {
+    try {
+      if (typeof sock.onWhatsApp === 'function') {
+        const results = await sock.onWhatsApp(jid);
+        if (!Array.isArray(results) || results.length === 0 || !results[0]?.exists) {
+          const displayNum = jid.split('@')[0];
+          return {
+            valid: false,
+            error: `Nomor ${displayNum} (${targetRaw}) TIDAK terdaftar di WhatsApp!`
+          };
+        }
+        return { valid: true, jid: results[0].jid || jid, exists: true };
+      }
+    } catch (err) {
+      console.warn('[onWhatsApp Check Warning]:', err.message);
+      // Jika terjadi error jaringan sementara pada saat query onWhatsApp, izinkan dengan jid asli
+      return { valid: true, jid, warning: err.message };
+    }
+  }
+
+  return { valid: true, jid };
+}
+
+
 
 function setupAutoBashIntegration() {
   const sendJsPath = path.resolve(__dirname, 'send.js');
@@ -345,11 +396,19 @@ function setupConsoleCLI() {
       return;
     }
 
-    const jid = normalizeConsoleJid(targetRaw);
-    if (!jid) {
-      console.log(`⚠️ [Console] Nomor tujuan "${targetRaw}" tidak valid.`);
+    if (!currentSock || !currentSock.user) {
+      console.log('⚠️ [Console] Bot belum login atau belum terhubung ke WhatsApp.');
       return;
     }
+
+    console.log(`🔍 [Console] Memeriksa status nomor ${targetRaw} di server WhatsApp...`);
+    const check = await validateAndResolveJid(currentSock, targetRaw);
+    if (!check.valid) {
+      console.log(`❌ [Console Ditolak] ${check.error}`);
+      return;
+    }
+
+    const jid = check.jid;
 
     try {
       console.log(`⏳ [Console] Mengirim pesan ke ${jid}...`);
@@ -396,11 +455,15 @@ function setupConsoleCLI() {
             return res.end(JSON.stringify({ success: false, error: 'Bot belum login atau belum terhubung ke WhatsApp.' }));
           }
 
-          const jid = normalizeConsoleJid(targetRaw);
-          if (!jid) {
+          console.log(`🔍 [Terminal/CLI] Memeriksa status nomor ${targetRaw} di server WhatsApp...`);
+          const check = await validateAndResolveJid(currentSock, targetRaw);
+          if (!check.valid) {
+            console.log(`❌ [Terminal/CLI Ditolak] ${check.error}`);
             res.writeHead(400, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ success: false, error: `Nomor/target "${targetRaw}" tidak valid.` }));
+            return res.end(JSON.stringify({ success: false, error: check.error }));
           }
+
+          const jid = check.jid;
 
           try {
             console.log(`⏳ [Terminal/CLI] Mengirim pesan ke ${jid}...`);
@@ -1033,10 +1096,9 @@ async function startBot() {
             }
 
             const rawTarget = args[0];
-            const targetJid = normalizeConsoleJid(rawTarget);
             const pesanMenfess = args.slice(1).join(' ').trim();
 
-            if (!targetJid || !pesanMenfess) {
+            if (!rawTarget || !pesanMenfess) {
               await sock.sendMessage(
                 sender,
                 { text: '⚠️ Nomor tujuan atau isi pesan menfess tidak valid!' },
@@ -1044,6 +1106,18 @@ async function startBot() {
               );
               break;
             }
+
+            const check = await validateAndResolveJid(sock, rawTarget);
+            if (!check.valid) {
+              await sock.sendMessage(
+                sender,
+                { text: `❌ ${check.error}` },
+                { quoted: msg }
+              );
+              break;
+            }
+
+            const targetJid = check.jid;
 
             try {
               const menfessText =
