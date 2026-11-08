@@ -332,400 +332,71 @@ async function validateAndResolveJid(sock, targetRaw) {
 
 
 
-function setupAutoBashIntegration() {
-  const sendJsPath = path.resolve(__dirname, 'send.js');
-  const sendBinPath = path.resolve(__dirname, 'send');
 
-  try { fs.chmodSync(sendBinPath, 0o755); } catch {}
-  try { fs.chmodSync(sendJsPath, 0o755); } catch {}
-
-  // 1. Pasang di node_modules/.bin/send (karena container Node sering masukkan ini ke PATH)
-  try {
-    const nmBin = path.resolve(__dirname, 'node_modules', '.bin');
-    fs.mkdirSync(nmBin, { recursive: true });
-    const nmSend = path.join(nmBin, 'send');
-    if (!fs.existsSync(nmSend)) {
-      try {
-        fs.symlinkSync(sendBinPath, nmSend);
-      } catch {
-        fs.copyFileSync(sendBinPath, nmSend);
-      }
-    }
-    try { fs.chmodSync(nmSend, 0o755); } catch {}
-  } catch {}
-
-  // 2. Coba pasang di /usr/local/bin/send (jika container mengizinkan write)
-  try {
-    const usrSend = '/usr/local/bin/send';
-    if (!fs.existsSync(usrSend)) {
-      try {
-        fs.symlinkSync(sendBinPath, usrSend);
-      } catch {
-        fs.copyFileSync(sendBinPath, usrSend);
-      }
-      try { fs.chmodSync(usrSend, 0o755); } catch {}
-    }
-  } catch {}
-
-  // 3. Tambahkan alias di ~/.bashrc dan /home/container/.bashrc
-  const homeDirs = [process.env.HOME, '/home/container', '/root'].filter(Boolean);
-  for (const h of homeDirs) {
-    try {
-      const bashrc = path.join(h, '.bashrc');
-      if (fs.existsSync(bashrc)) {
-        let rc = fs.readFileSync(bashrc, 'utf-8');
-        if (!rc.includes('alias send=') && !rc.includes('send()')) {
-          rc += `\nalias send="node ${sendJsPath}"\nexport PATH="$PATH:${path.dirname(sendJsPath)}:${path.resolve(__dirname, 'node_modules', '.bin')}"\n`;
-          fs.writeFileSync(bashrc, rc, 'utf-8');
-        }
-      }
-    } catch {}
+// Cache ID pesan untuk mencegah duplikasi eksekusi command
+const processedCommandIds = new Set();
+function markCommandProcessed(msgId) {
+  if (!msgId) return;
+  if (processedCommandIds.size > 1000) {
+    const first = processedCommandIds.keys().next().value;
+    processedCommandIds.delete(first);
   }
+  processedCommandIds.add(msgId);
 }
 
-function setupConsoleCLI() {
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-    terminal: false
-  });
+async function handleBotCommand(sock, {
+  sender,
+  bodyText,
+  msg = null,
+  rawMsg = null,
+  isFromMe = false,
+  userKey = null,
+  isConsole = false
+}) {
+  if (!sock || !sender || !bodyText) return;
+  if (!bodyText.startsWith(config.prefix)) return;
 
-  rl.on('line', async (line) => {
-    const raw = line.trim();
-    if (!raw) return;
+  const msgId = msg?.key?.id;
+  if (msgId && processedCommandIds.has(msgId)) {
+    return;
+  }
+  if (msgId) {
+    markCommandProcessed(msgId);
+  }
 
-    const parts = raw.split(/\s+/);
-    const cmd = parts[0].toLowerCase();
+  if (!userKey) {
+    userKey = msg?.key?.participant || sender;
+  }
 
-    if (cmd === 'help' || cmd === 'menu') {
-      console.log('\n================== PANDUAN CONSOLE BOT-HOSTING ==================');
-      console.log('1. Kirim pesan ke nomor/grup WhatsApp:');
-      console.log('   send <nomor/grup> <pesan>');
-      console.log('   Contoh: send 081234567890 Halo dari console panel!');
-      console.log('   Contoh: send 1203630234567890@g.us Halo semua anggota grup!');
-      console.log('   Contoh: send me Ini catatan buat nomor bot sendiri');
-      console.log('   Contoh: send owner Halo owner!');
-      console.log('2. Shortcut cepat (langsung ketik nomor lalu pesan):');
-      console.log('   081234567890 Halo apa kabar?');
-      console.log('3. Cek status & pemakaian RAM container:');
-      console.log('   status');
-      console.log('4. Eksekusi kode JS (debug):');
-      console.log('   eval <kode>');
-      console.log('5. Tampilkan bantuan ini:');
-      console.log('   help');
-      console.log('===================================================================\n');
-      return;
-    }
+  if (!rawMsg && msg) {
+    rawMsg = unwrapMessage(msg);
+  }
 
-    if (cmd === 'status') {
-      const isConnected = !!(currentSock && currentSock.user);
-      const botNum = currentSock?.user?.id ? currentSock.user.id.split(':')[0] : 'Belum login';
-      const uptimeSec = Math.floor(process.uptime());
-      const hours = Math.floor(uptimeSec / 3600);
-      const mins = Math.floor((uptimeSec % 3600) / 60);
-      const memRss = Math.round(process.memoryUsage().rss / 1024 / 1024);
-      const memHeap = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
-      console.log(`[Status Console] Terhubung: ${isConnected ? 'YA (Aktif)' : 'TIDAK'} | Nomor: ${botNum} | Uptime: ${hours}j ${mins}m | RAM: ${memRss}MB (Heap: ${memHeap}MB)`);
-      return;
-    }
+  const args = bodyText.slice(config.prefix.length).trim().split(/ +/);
+  const command = (args.shift() || '').toLowerCase();
+  if (!command) return;
 
-    if (cmd === 'eval') {
-      const code = parts.slice(1).join(' ').trim();
-      if (!code) {
-        console.log('⚠️ [Console] Masukkan kode JavaScript untuk di-eval.');
-        return;
-      }
-      try {
-        const result = eval(code);
-        console.log('➡️ [Eval Result]:', result);
-      } catch (err) {
-        console.error('❌ [Eval Error]:', err.message);
-      }
-      return;
-    }
+  // Perintah tanpa argumen dapat memakai isi pesan yang sedang di-reply.
+  const quotedText = getQuotedText(rawMsg);
+  if (args.length === 0 && quotedText) args.push(quotedText);
 
-    if (!currentSock || !currentSock.user) {
-      console.log('⚠️ [Console] Bot belum terhubung ke WhatsApp. Tunggu hingga login selesai atau scan QR.');
-      return;
-    }
+  console.log(`[Pesan Masuk] Command: ${config.prefix}${command} | Dari: ${sender} | Self: ${isFromMe} | Console: ${isConsole}`);
 
-    let targetRaw = '';
-    let messageText = '';
+  // Cek proteksi anti-spam (kecuali dari diri sendiri/owner/console)
+  if (!isFromMe && !isConsole && isCoolingDown(sender)) {
+    console.log(`[Anti-Spam] Mengabaikan spam dari: ${sender}`);
+    return;
+  }
 
-    if (['send', 'kirim', 'msg', 'say'].includes(cmd)) {
-      targetRaw = parts[1];
-      messageText = parts.slice(2).join(' ').trim();
-    } else if (cmd === 'me' || cmd === 'self') {
-      targetRaw = 'me';
-      messageText = parts.slice(1).join(' ').trim();
-    } else if (cmd === 'owner') {
-      targetRaw = 'owner';
-      messageText = parts.slice(1).join(' ').trim();
-    } else if (parts[0].match(/^(08|62|\+62|[0-9]{8,20}|.*@g\.us|.*@s\.whatsapp\.net|.*@lid)/i)) {
-      targetRaw = parts[0];
-      messageText = parts.slice(1).join(' ').trim();
-    } else {
-      console.log(`⚠️ [Console] Perintah "${cmd}" tidak dikenal. Ketik "help" untuk bantuan.`);
-      return;
-    }
+  // Jeda alami agar tidak seperti bot kaku
+  const delay = isConsole ? 350 : Math.floor(
+    Math.random() * (config.antiBan.maxTypingDelayMs - config.antiBan.minTypingDelayMs) +
+      config.antiBan.minTypingDelayMs
+  );
+  await sock.sendPresenceUpdate('composing', sender);
+  await sleep(delay);
 
-    if (!targetRaw || !messageText) {
-      console.log('⚠️ [Console] Format salah. Contoh: send 081234567890 Halo ini pesan dari console');
-      return;
-    }
-
-    if (!currentSock || !currentSock.user) {
-      console.log('⚠️ [Console] Bot belum login atau belum terhubung ke WhatsApp.');
-      return;
-    }
-
-    console.log(`🔍 [Console] Memeriksa status nomor ${targetRaw} di server WhatsApp...`);
-    const check = await validateAndResolveJid(currentSock, targetRaw);
-    if (!check.valid) {
-      console.log(`❌ [Console Ditolak] ${check.error}`);
-      return;
-    }
-
-    const jid = check.jid;
-
-    const destDesc = check.isSelf ? `nomor sendiri / self chat (${jid})` : jid;
-
-    try {
-      console.log(`⏳ [Console] Mengirim pesan ke ${destDesc}...`);
-      const sent = await currentSock.sendMessage(jid, { text: messageText });
-      if (sent?.key?.id && sent?.message) {
-        storeMessage(sent.key.id, sent.message);
-      }
-      console.log(`✅ [Console Sukses] Pesan terkirim ke ${destDesc}: "${messageText}"`);
-    } catch (err) {
-      console.error(`❌ [Console Gagal] Tidak dapat mengirim pesan ke ${destDesc}:`, err.message);
-    }
-  });
-
-  rl.on('error', (err) => {
-    console.error('[Console CLI Error]:', err.message);
-  });
-
-  // Jalankan integrasi bash terminal otomatis
-  setupAutoBashIntegration();
-
-  // HTTP IPC Server pada 127.0.0.1:45678 untuk menerima perintah send dari bash terminal
   try {
-    const ipcServer = http.createServer(async (req, res) => {
-      const url = new URL(req.url, 'http://127.0.0.1:45678');
-      if (url.pathname === '/send') {
-        let body = '';
-        req.on('data', chunk => body += chunk);
-        req.on('end', async () => {
-          let targetRaw = url.searchParams.get('to') || url.searchParams.get('target');
-          let messageText = url.searchParams.get('msg') || url.searchParams.get('message') || url.searchParams.get('text');
-
-          if (body) {
-            try {
-              const parsed = JSON.parse(body);
-              targetRaw = parsed.target || parsed.to || targetRaw;
-              messageText = parsed.message || parsed.msg || parsed.text || messageText;
-            } catch {}
-          }
-
-          if (!targetRaw || !messageText) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ success: false, error: 'Target nomor dan pesan wajib diisi.' }));
-          }
-
-          if (!currentSock || !currentSock.user) {
-            res.writeHead(503, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ success: false, error: 'Bot belum login atau belum terhubung ke WhatsApp.' }));
-          }
-
-          console.log(`🔍 [Terminal/CLI] Memeriksa status nomor ${targetRaw} di server WhatsApp...`);
-          const check = await validateAndResolveJid(currentSock, targetRaw);
-          if (!check.valid) {
-            console.log(`❌ [Terminal/CLI Ditolak] ${check.error}`);
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ success: false, error: check.error }));
-          }
-
-          const jid = check.jid;
-
-          const destDesc = check.isSelf ? `nomor sendiri / self chat (${jid})` : jid;
-
-          try {
-            console.log(`⏳ [Terminal/CLI] Mengirim pesan ke ${destDesc}...`);
-            const sent = await currentSock.sendMessage(jid, { text: messageText });
-            if (sent?.key?.id && sent?.message) {
-              storeMessage(sent.key.id, sent.message);
-            }
-            console.log(`✅ [Terminal/CLI Sukses] Pesan terkirim ke ${destDesc}: "${messageText}"`);
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ success: true, jid, message: messageText, isSelf: check.isSelf }));
-          } catch (err) {
-            console.error(`❌ [Terminal/CLI Gagal] Gagal kirim ke ${destDesc}:`, err.message);
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ success: false, error: err.message }));
-          }
-        });
-        return;
-      }
-
-      if (url.pathname === '/status') {
-        const isConnected = !!(currentSock && currentSock.user);
-        const botNum = currentSock?.user?.id ? currentSock.user.id.split(':')[0] : 'Belum login';
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ connected: isConnected, number: botNum, uptime: process.uptime() }));
-      }
-
-      res.writeHead(404, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Endpoint tidak ditemukan' }));
-    });
-
-    ipcServer.listen(45678, '127.0.0.1', () => {});
-    ipcServer.on('error', () => {});
-  } catch {}
-
-}
-
-async function startBot() {
-  const sessionDir = path.resolve('./session');
-  fs.mkdirSync(sessionDir, { recursive: true, mode: 0o700 });
-  try { fs.chmodSync(sessionDir, 0o700); } catch {}
-  const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
-  const { version } = await fetchLatestBaileysVersion();
-
-  console.log(`Menghubungkan WhatsApp Bot v${version.join('.')}...`);
-
-  const sock = makeWASocket({
-    version,
-    logger: pino({ level: 'silent' }),
-    printQRInTerminal: false,
-    auth: state,
-    browser: Browsers.macOS('Desktop'),
-    syncFullHistory: false,
-    markOnlineOnConnect: false,
-    msgRetryCounterCache,
-    getMessage: async (key) => {
-      if (key?.id) {
-        return messageStore.get(key.id);
-      }
-      return undefined;
-    }
-  });
-
-  sock.ev.on('connection.update', async (update) => {
-    const { connection, lastDisconnect, qr } = update;
-
-    if (qr) {
-      console.log('\n================ SCAN QR CODE INI DI WHATSAPP ================');
-      qrcode.generate(qr, { small: true });
-      console.log('Buka WA di HP > Perangkat Tertaut > Tautkan Perangkat > Scan QR di atas\n');
-    }
-
-    if (connection === 'close') {
-      currentSock = null;
-      const statusCode = lastDisconnect?.error?.output?.statusCode;
-      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-      console.log(`Koneksi terputus (status: ${statusCode}). Reconnecting: ${shouldReconnect}`);
-      if (shouldReconnect) {
-        setTimeout(startBot, 3000);
-      } else {
-        console.log('Sesi logout. Hapus folder ./session dan scan QR ulang.');
-      }
-    } else if (connection === 'open') {
-      currentSock = sock;
-      console.log('========================================');
-      console.log('✅ Bot WhatsApp Berhasil Terhubung & Aktif!');
-      console.log('💡 [Console / Terminal Shell Aktif]');
-      console.log('   Jika di terminal bash (~ $):');
-      console.log('   👉 ./send <nomor> <pesan>       (Contoh: ./send 085281929641 halo)');
-      console.log('   👉 node send.js <nomor> <pesan> (Contoh: node send.js 085281929641 halo)');
-      console.log('   👉 send <nomor> <pesan>');
-      console.log('   Jika di input console bot-hosting langsung:');
-      console.log('   👉 send <nomor> <pesan>  |  help');
-      console.log('========================================');
-    }
-  });
-
-  sock.ev.on('creds.update', saveCreds);
-
-  sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    if (type !== 'notify') return;
-
-    for (const msg of messages) {
-      if (!msg.message) continue;
-      if (msg.key?.id) {
-        storeMessage(msg.key.id, msg.message);
-      }
-      if (msg.key.remoteJid === 'status@broadcast') continue;
-
-      const rawMsg = unwrapMessage(msg);
-      if (!rawMsg) continue;
-
-      const sender = msg.key.remoteJid;
-      const userKey = msg.key.participant || sender;
-      const isFromMe = Boolean(msg.key.fromMe);
-
-      if (sender && sender.endsWith('@lid') && (isFromMe || userKey === sender)) {
-        saveSelfLid(sender);
-      }
-
-      // Ambil teks dari berbagai kemungkinan pesan
-      let bodyText = '';
-      if (rawMsg.conversation) {
-        bodyText = rawMsg.conversation;
-      } else if (rawMsg.extendedTextMessage?.text) {
-        bodyText = rawMsg.extendedTextMessage.text;
-      } else if (rawMsg.imageMessage?.caption) {
-        bodyText = rawMsg.imageMessage.caption;
-      } else if (rawMsg.videoMessage?.caption) {
-        bodyText = rawMsg.videoMessage.caption;
-      }
-
-      bodyText = (bodyText || '').trim();
-
-      // Cek apakah ada game Tebak Kata yang sedang aktif di chat ini
-      if (activeGames.has(sender)) {
-        const game = activeGames.get(sender);
-        const guess = bodyText.toLowerCase().trim();
-        if (guess === game.answer) {
-          clearTimeout(game.timer);
-          activeGames.delete(sender);
-          await sock.sendMessage(
-            sender,
-            { text: `🎉 *SELAMAT!* Jawaban kamu BENAR!\nJawaban: *${game.answer.toUpperCase()}* 🏆` },
-            { quoted: msg }
-          );
-          continue;
-        }
-      }
-
-      // Hanya proses pesan yang diawali prefix (contoh: .s, .menu)
-      if (!bodyText.startsWith(config.prefix)) {
-        continue;
-      }
-
-      const args = bodyText.slice(config.prefix.length).trim().split(/ +/);
-      const command = (args.shift() || '').toLowerCase();
-      // Perintah tanpa argumen dapat memakai isi pesan yang sedang di-reply.
-      const quotedText = getQuotedText(rawMsg);
-      if (args.length === 0 && quotedText) args.push(quotedText);
-
-      console.log(`[Pesan Masuk] Command: ${config.prefix}${command} | Dari: ${sender} | Self: ${isFromMe}`);
-
-      // Cek proteksi anti-spam (kecuali dari diri sendiri/owner)
-      if (!isFromMe && isCoolingDown(sender)) {
-        console.log(`[Anti-Spam] Mengabaikan spam dari: ${sender}`);
-        continue;
-      }
-
-      // Jeda alami agar tidak seperti bot kaku
-      const delay = Math.floor(
-        Math.random() * (config.antiBan.maxTypingDelayMs - config.antiBan.minTypingDelayMs) +
-          config.antiBan.minTypingDelayMs
-      );
-      await sock.sendPresenceUpdate('composing', sender);
-      await sleep(delay);
-
-      try {
         switch (command) {
           case 'menu':
           case 'help': {
@@ -1843,6 +1514,427 @@ async function startBot() {
       } finally {
         await sock.sendPresenceUpdate('paused', sender);
       }
+}
+
+function setupAutoBashIntegration() {
+  const sendJsPath = path.resolve(__dirname, 'send.js');
+  const sendBinPath = path.resolve(__dirname, 'send');
+
+  try { fs.chmodSync(sendBinPath, 0o755); } catch {}
+  try { fs.chmodSync(sendJsPath, 0o755); } catch {}
+
+  // 1. Pasang di node_modules/.bin/send (karena container Node sering masukkan ini ke PATH)
+  try {
+    const nmBin = path.resolve(__dirname, 'node_modules', '.bin');
+    fs.mkdirSync(nmBin, { recursive: true });
+    const nmSend = path.join(nmBin, 'send');
+    if (!fs.existsSync(nmSend)) {
+      try {
+        fs.symlinkSync(sendBinPath, nmSend);
+      } catch {
+        fs.copyFileSync(sendBinPath, nmSend);
+      }
+    }
+    try { fs.chmodSync(nmSend, 0o755); } catch {}
+  } catch {}
+
+  // 2. Coba pasang di /usr/local/bin/send (jika container mengizinkan write)
+  try {
+    const usrSend = '/usr/local/bin/send';
+    if (!fs.existsSync(usrSend)) {
+      try {
+        fs.symlinkSync(sendBinPath, usrSend);
+      } catch {
+        fs.copyFileSync(sendBinPath, usrSend);
+      }
+      try { fs.chmodSync(usrSend, 0o755); } catch {}
+    }
+  } catch {}
+
+  // 3. Tambahkan alias di ~/.bashrc dan /home/container/.bashrc
+  const homeDirs = [process.env.HOME, '/home/container', '/root'].filter(Boolean);
+  for (const h of homeDirs) {
+    try {
+      const bashrc = path.join(h, '.bashrc');
+      if (fs.existsSync(bashrc)) {
+        let rc = fs.readFileSync(bashrc, 'utf-8');
+        if (!rc.includes('alias send=') && !rc.includes('send()')) {
+          rc += `\nalias send="node ${sendJsPath}"\nexport PATH="$PATH:${path.dirname(sendJsPath)}:${path.resolve(__dirname, 'node_modules', '.bin')}"\n`;
+          fs.writeFileSync(bashrc, rc, 'utf-8');
+        }
+      }
+    } catch {}
+  }
+}
+
+function setupConsoleCLI() {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+    terminal: false
+  });
+
+  rl.on('line', async (line) => {
+    const raw = line.trim();
+    if (!raw) return;
+
+    const parts = raw.split(/\s+/);
+    const cmd = parts[0].toLowerCase();
+
+    if (cmd === 'help' || cmd === 'menu') {
+      console.log('\n================== PANDUAN CONSOLE BOT-HOSTING ==================');
+      console.log('1. Kirim pesan ke nomor/grup WhatsApp:');
+      console.log('   send <nomor/grup> <pesan>');
+      console.log('   Contoh: send 081234567890 Halo dari console panel!');
+      console.log('   Contoh: send 1203630234567890@g.us Halo semua anggota grup!');
+      console.log('   Contoh: send me Ini catatan buat nomor bot sendiri');
+      console.log('   Contoh: send owner Halo owner!');
+      console.log('2. Shortcut cepat (langsung ketik nomor lalu pesan):');
+      console.log('   081234567890 Halo apa kabar?');
+      console.log('3. Cek status & pemakaian RAM container:');
+      console.log('   status');
+      console.log('4. Eksekusi kode JS (debug):');
+      console.log('   eval <kode>');
+      console.log('5. Tampilkan bantuan ini:');
+      console.log('   help');
+      console.log('===================================================================\n');
+      return;
+    }
+
+    if (cmd === 'status') {
+      const isConnected = !!(currentSock && currentSock.user);
+      const botNum = currentSock?.user?.id ? currentSock.user.id.split(':')[0] : 'Belum login';
+      const uptimeSec = Math.floor(process.uptime());
+      const hours = Math.floor(uptimeSec / 3600);
+      const mins = Math.floor((uptimeSec % 3600) / 60);
+      const memRss = Math.round(process.memoryUsage().rss / 1024 / 1024);
+      const memHeap = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
+      console.log(`[Status Console] Terhubung: ${isConnected ? 'YA (Aktif)' : 'TIDAK'} | Nomor: ${botNum} | Uptime: ${hours}j ${mins}m | RAM: ${memRss}MB (Heap: ${memHeap}MB)`);
+      return;
+    }
+
+    if (cmd === 'eval') {
+      const code = parts.slice(1).join(' ').trim();
+      if (!code) {
+        console.log('⚠️ [Console] Masukkan kode JavaScript untuk di-eval.');
+        return;
+      }
+      try {
+        const result = eval(code);
+        console.log('➡️ [Eval Result]:', result);
+      } catch (err) {
+        console.error('❌ [Eval Error]:', err.message);
+      }
+      return;
+    }
+
+    if (!currentSock || !currentSock.user) {
+      console.log('⚠️ [Console] Bot belum terhubung ke WhatsApp. Tunggu hingga login selesai atau scan QR.');
+      return;
+    }
+
+    let targetRaw = '';
+    let messageText = '';
+
+    if (['send', 'kirim', 'msg', 'say'].includes(cmd)) {
+      targetRaw = parts[1];
+      messageText = parts.slice(2).join(' ').trim();
+    } else if (cmd === 'me' || cmd === 'self') {
+      targetRaw = 'me';
+      messageText = parts.slice(1).join(' ').trim();
+    } else if (cmd === 'owner') {
+      targetRaw = 'owner';
+      messageText = parts.slice(1).join(' ').trim();
+    } else if (parts[0].match(/^(08|62|\+62|[0-9]{8,20}|.*@g\.us|.*@s\.whatsapp\.net|.*@lid)/i)) {
+      targetRaw = parts[0];
+      messageText = parts.slice(1).join(' ').trim();
+    } else {
+      console.log(`⚠️ [Console] Perintah "${cmd}" tidak dikenal. Ketik "help" untuk bantuan.`);
+      return;
+    }
+
+    if (!targetRaw || !messageText) {
+      console.log('⚠️ [Console] Format salah. Contoh: send 081234567890 Halo ini pesan dari console');
+      return;
+    }
+
+    if (!currentSock || !currentSock.user) {
+      console.log('⚠️ [Console] Bot belum login atau belum terhubung ke WhatsApp.');
+      return;
+    }
+
+    console.log(`🔍 [Console] Memeriksa status nomor ${targetRaw} di server WhatsApp...`);
+    const check = await validateAndResolveJid(currentSock, targetRaw);
+    if (!check.valid) {
+      console.log(`❌ [Console Ditolak] ${check.error}`);
+      return;
+    }
+
+    const jid = check.jid;
+
+    const destDesc = check.isSelf ? `nomor sendiri / self chat (${jid})` : jid;
+
+    try {
+      console.log(`⏳ [Console] Mengirim pesan ke ${destDesc}...`);
+      const sent = await currentSock.sendMessage(jid, { text: messageText });
+      if (sent?.key?.id && sent?.message) {
+        storeMessage(sent.key.id, sent.message);
+      }
+      console.log(`✅ [Console Sukses] Pesan terkirim ke ${destDesc}: "${messageText}"`);
+
+      // Jika pesan adalah command bot (.menu, .ping, dll), eksekusi otomatis
+      if (messageText.startsWith(config.prefix)) {
+        console.log(`⚙️ [Console Command] Menjalankan perintah "${messageText}" untuk ${destDesc}...`);
+        handleBotCommand(currentSock, {
+          sender: jid,
+          bodyText: messageText,
+          msg: sent,
+          rawMsg: unwrapMessage(sent),
+          isFromMe: true,
+          userKey: currentSock.user?.id || jid,
+          isConsole: true
+        }).catch(err => {
+          console.error(`❌ [Console Command Error]:`, err.message);
+        });
+      }
+    } catch (err) {
+      console.error(`❌ [Console Gagal] Tidak dapat mengirim pesan ke ${destDesc}:`, err.message);
+    }
+  });
+
+  rl.on('error', (err) => {
+    console.error('[Console CLI Error]:', err.message);
+  });
+
+  // Jalankan integrasi bash terminal otomatis
+  setupAutoBashIntegration();
+
+  // HTTP IPC Server pada 127.0.0.1:45678 untuk menerima perintah send dari bash terminal
+  try {
+    const ipcServer = http.createServer(async (req, res) => {
+      const url = new URL(req.url, 'http://127.0.0.1:45678');
+      if (url.pathname === '/send') {
+        let body = '';
+        req.on('data', chunk => body += chunk);
+        req.on('end', async () => {
+          let targetRaw = url.searchParams.get('to') || url.searchParams.get('target');
+          let messageText = url.searchParams.get('msg') || url.searchParams.get('message') || url.searchParams.get('text');
+
+          if (body) {
+            try {
+              const parsed = JSON.parse(body);
+              targetRaw = parsed.target || parsed.to || targetRaw;
+              messageText = parsed.message || parsed.msg || parsed.text || messageText;
+            } catch {}
+          }
+
+          if (!targetRaw || !messageText) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ success: false, error: 'Target nomor dan pesan wajib diisi.' }));
+          }
+
+          if (!currentSock || !currentSock.user) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ success: false, error: 'Bot belum login atau belum terhubung ke WhatsApp.' }));
+          }
+
+          console.log(`🔍 [Terminal/CLI] Memeriksa status nomor ${targetRaw} di server WhatsApp...`);
+          const check = await validateAndResolveJid(currentSock, targetRaw);
+          if (!check.valid) {
+            console.log(`❌ [Terminal/CLI Ditolak] ${check.error}`);
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ success: false, error: check.error }));
+          }
+
+          const jid = check.jid;
+
+          const destDesc = check.isSelf ? `nomor sendiri / self chat (${jid})` : jid;
+
+          try {
+            console.log(`⏳ [Terminal/CLI] Mengirim pesan ke ${destDesc}...`);
+            const sent = await currentSock.sendMessage(jid, { text: messageText });
+            if (sent?.key?.id && sent?.message) {
+              storeMessage(sent.key.id, sent.message);
+            }
+            console.log(`✅ [Terminal/CLI Sukses] Pesan terkirim ke ${destDesc}: "${messageText}"`);
+
+            const isCmd = messageText.startsWith(config.prefix);
+            if (isCmd) {
+              console.log(`⚙️ [Terminal Command] Menjalankan perintah "${messageText}" untuk ${destDesc}...`);
+              handleBotCommand(currentSock, {
+                sender: jid,
+                bodyText: messageText,
+                msg: sent,
+                rawMsg: unwrapMessage(sent),
+                isFromMe: true,
+                userKey: currentSock.user?.id || jid,
+                isConsole: true
+              }).catch(err => {
+                console.error(`❌ [Terminal Command Error]:`, err.message);
+              });
+            }
+
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              success: true,
+              jid,
+              message: messageText,
+              isSelf: check.isSelf,
+              isCommand: isCmd
+            }));
+          } catch (err) {
+            console.error(`❌ [Terminal/CLI Gagal] Gagal kirim ke ${destDesc}:`, err.message);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ success: false, error: err.message }));
+          }
+        });
+        return;
+      }
+
+      if (url.pathname === '/status') {
+        const isConnected = !!(currentSock && currentSock.user);
+        const botNum = currentSock?.user?.id ? currentSock.user.id.split(':')[0] : 'Belum login';
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ connected: isConnected, number: botNum, uptime: process.uptime() }));
+      }
+
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Endpoint tidak ditemukan' }));
+    });
+
+    ipcServer.listen(45678, '127.0.0.1', () => {});
+    ipcServer.on('error', () => {});
+  } catch {}
+
+}
+
+async function startBot() {
+  const sessionDir = path.resolve('./session');
+  fs.mkdirSync(sessionDir, { recursive: true, mode: 0o700 });
+  try { fs.chmodSync(sessionDir, 0o700); } catch {}
+  const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
+  const { version } = await fetchLatestBaileysVersion();
+
+  console.log(`Menghubungkan WhatsApp Bot v${version.join('.')}...`);
+
+  const sock = makeWASocket({
+    version,
+    logger: pino({ level: 'silent' }),
+    printQRInTerminal: false,
+    auth: state,
+    browser: Browsers.macOS('Desktop'),
+    syncFullHistory: false,
+    markOnlineOnConnect: false,
+    msgRetryCounterCache,
+    getMessage: async (key) => {
+      if (key?.id) {
+        return messageStore.get(key.id);
+      }
+      return undefined;
+    }
+  });
+
+  sock.ev.on('connection.update', async (update) => {
+    const { connection, lastDisconnect, qr } = update;
+
+    if (qr) {
+      console.log('\n================ SCAN QR CODE INI DI WHATSAPP ================');
+      qrcode.generate(qr, { small: true });
+      console.log('Buka WA di HP > Perangkat Tertaut > Tautkan Perangkat > Scan QR di atas\n');
+    }
+
+    if (connection === 'close') {
+      currentSock = null;
+      const statusCode = lastDisconnect?.error?.output?.statusCode;
+      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+      console.log(`Koneksi terputus (status: ${statusCode}). Reconnecting: ${shouldReconnect}`);
+      if (shouldReconnect) {
+        setTimeout(startBot, 3000);
+      } else {
+        console.log('Sesi logout. Hapus folder ./session dan scan QR ulang.');
+      }
+    } else if (connection === 'open') {
+      currentSock = sock;
+      console.log('========================================');
+      console.log('✅ Bot WhatsApp Berhasil Terhubung & Aktif!');
+      console.log('💡 [Console / Terminal Shell Aktif]');
+      console.log('   Jika di terminal bash (~ $):');
+      console.log('   👉 ./send <nomor> <pesan>       (Contoh: ./send 085281929641 halo)');
+      console.log('   👉 node send.js <nomor> <pesan> (Contoh: node send.js 085281929641 halo)');
+      console.log('   👉 send <nomor> <pesan>');
+      console.log('   Jika di input console bot-hosting langsung:');
+      console.log('   👉 send <nomor> <pesan>  |  help');
+      console.log('========================================');
+    }
+  });
+
+  sock.ev.on('creds.update', saveCreds);
+
+  sock.ev.on('messages.upsert', async ({ messages, type }) => {
+    if (type !== 'notify') return;
+
+    for (const msg of messages) {
+      if (!msg.message) continue;
+      if (msg.key?.id) {
+        storeMessage(msg.key.id, msg.message);
+      }
+      if (msg.key.remoteJid === 'status@broadcast') continue;
+
+      const rawMsg = unwrapMessage(msg);
+      if (!rawMsg) continue;
+
+      const sender = msg.key.remoteJid;
+      const userKey = msg.key.participant || sender;
+      const isFromMe = Boolean(msg.key.fromMe);
+
+      if (sender && sender.endsWith('@lid') && (isFromMe || userKey === sender)) {
+        saveSelfLid(sender);
+      }
+
+      // Ambil teks dari berbagai kemungkinan pesan
+      let bodyText = '';
+      if (rawMsg.conversation) {
+        bodyText = rawMsg.conversation;
+      } else if (rawMsg.extendedTextMessage?.text) {
+        bodyText = rawMsg.extendedTextMessage.text;
+      } else if (rawMsg.imageMessage?.caption) {
+        bodyText = rawMsg.imageMessage.caption;
+      } else if (rawMsg.videoMessage?.caption) {
+        bodyText = rawMsg.videoMessage.caption;
+      }
+
+      bodyText = (bodyText || '').trim();
+
+      // Cek apakah ada game Tebak Kata yang sedang aktif di chat ini
+      if (activeGames.has(sender)) {
+        const game = activeGames.get(sender);
+        const guess = bodyText.toLowerCase().trim();
+        if (guess === game.answer) {
+          clearTimeout(game.timer);
+          activeGames.delete(sender);
+          await sock.sendMessage(
+            sender,
+            { text: `🎉 *SELAMAT!* Jawaban kamu BENAR!\nJawaban: *${game.answer.toUpperCase()}* 🏆` },
+            { quoted: msg }
+          );
+          continue;
+        }
+      }
+
+      // Hanya proses pesan yang diawali prefix (contoh: .s, .menu)
+      if (!bodyText.startsWith(config.prefix)) {
+        continue;
+      }
+
+      await handleBotCommand(sock, {
+        sender,
+        bodyText,
+        msg,
+        rawMsg,
+        isFromMe,
+        userKey,
+        isConsole: false
+      });
     }
   });
 }
