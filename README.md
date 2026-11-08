@@ -5,16 +5,58 @@ Bot WhatsApp multifitur dengan sistem otentikasi Scan QR, dilengkapi proteksi An
 ---
 
 ## 🚀 Fitur Utama
-- **`.brat <teks>`** : Membuat stiker teks Brat dengan background putih dan teks hitam (khas album Brat).
-- **`.bratvid <teks>`** : Membuat stiker video/animasi Brat di mana katanya muncul satu per satu hingga selesai.
-- **`.s` / `.sticker`** : Kirim gambar langsung atau balas (*reply*) pesan gambar orang lain untuk diubah menjadi stiker WhatsApp WebP transparan 512x512.
-- **`.hd` / `.remini`** : Kirim atau balas gambar untuk di-upscale / diperjelas menggunakan AI. Dilengkapi fallback sharpening otomatis jika server AI eksternal offline.
-- **`.menu` / `.help`** : Menampilkan daftar lengkap fitur dan cara pakainya.
-- **`.ping`** : Menguji latensi respons bot (dalam milidetik).
-- **`.calc <rumus>`** : Menghitung operasi matematika cepat langsung di chat (contoh: `.calc 150000 * 0.12`).
-- **`.runtime`** : Melihat sudah berapa lama bot menyala nonstop.
-- **Grup (admin):** `.kick`, `.promote`, `.demote`, `.mute`, `.unmute`, `.tagall`, `.groupinfo`. Bot dan pengirim harus memiliki peran admin sesuai tindakan.
-- **`.owner`** : Menampilkan nomor kontak pemilik bot.
+
+### 🎨 Stiker & Meme
+- **`.s` / `.sticker`** : Ubah foto jadi stiker WA (bisa kirim langsung atau reply).
+- **`.qc <teks>`** : Buat stiker gelembung chat estetik ala Telegram/WhatsApp (Fake Chat).
+- **`.smeme <atas> | <bawah>`** : Bikin meme instan dari foto dengan font Impact bergaris hitam.
+- **`.ttp <teks>`** : Buat stiker teks neon keren.
+- **`.attp <teks>`** : Buat stiker teks animasi kelap-kelip warna pelangi.
+- **`.brat <teks>`** : Stiker teks Brat putih khas album Brat Charli XCX.
+- **`.bratvid <teks>`** : Stiker video Brat animasi kata demi kata.
+- **`.toimg`** : Reply stiker untuk diubah kembali menjadi foto biasa.
+- **`.hd` / `.remini`** : Tingkatkan resolusi dan ketajaman foto ke HD.
+
+### 📥 Downloader & Pencarian
+- **`.tt` / `.tiktok <link>`** : Unduh video TikTok tanpa watermark.
+- **`.pin` / `.img <kata>`** : Cari gambar estetik dari Pinterest / resolusi HD.
+- **`.ssweb <link>`** : Tangkapan layar (screenshot) website otomatis.
+
+### 🎙️ Audio & Voice Note
+- **`.tts <teks>`** : Ubah teks jadi suara Google Voice Note (Indonesia).
+- **`.bass`** : Reply pesan audio/VN untuk efek bass boosted.
+- **`.slow`** : Reply pesan audio/VN untuk efek slowed + reverb.
+- **`.chipmunk`** : Reply pesan audio/VN untuk suara cempreng tupai.
+
+### 🤖 Artificial Intelligence
+- **`.ai <tanya>`** : Tanya jawab dengan AI (mendukung memori percakapan berlanjut).
+- **`.resetai`** : Hapus ingatan percakapan AI.
+- **`.persona <karakter>`** : Atur gaya kepribadian AI kamu sendiri.
+- **`.persona reset`** : Hapus persona khusus.
+
+### 🛠️ Utilitas & Islami
+- **`.gempa`** : Info gempa bumi BMKG terkini + peta lokasi pusat gempa.
+- **`.menfess <nomor> <pesan>`** : Kirim pesan rahasia anonim ke nomor orang lain.
+- **`.qr <teks>`** : Buat kode QR instan.
+- **`.tr <kode> <teks>`** : Terjemahan bahasa (.tr en halo).
+- **`.wiki <kata>`** : Cari ringkasan Wikipedia.
+- **`.short <link>`** : Pemendek tautan TinyURL.
+- **`.cuaca <kota>`** : Cek cuaca & suhu kota realtime.
+- **`.calc <rumus>`** : Kalkulator matematika cepat.
+- **`.sholat <kota>`** : Jadwal waktu sholat harian.
+- **`.surah <nomor>`** : Detail surah Al-Qur'an.
+
+### 🎲 Game & Hiburan
+- **`.tebakkata`** : Game tebak kata interaktif berhadiah skor dengan petunjuk.
+- **`.dadu`** & **`.koin`** : Lempar dadu & koin acak.
+- **`.apakah`**, **`.siapakah`**, **`.rate`** : Game tongkrongan santai.
+
+### 👥 Kontrol Grup (Admin)
+- **`.tagall <pesan>`** / **`.hidetag <pesan>`** : Mention semua anggota grup.
+- **`.mute`** / **`.unmute`** : Tutup / buka izin chat anggota grup.
+- **`.kick`**, **`.promote`**, **`.demote`** : Moderasi anggota grup.
+- **`.linkgroup`** : Ambil link undangan grup.
+- **`.groupinfo`** : Statistik dan deskripsi grup.
 
 ---
 
