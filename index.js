@@ -167,26 +167,87 @@ async function getMediaBuffer(mediaMsg, type = 'image') {
 // Global reference untuk bot socket aktif agar bisa diakses oleh Console CLI
 let currentSock = null;
 
-function normalizeConsoleJid(rawTarget) {
+// Cache untuk pesan agar Baileys dapat melayani retry receipt ("Menunggu pesan ini")
+const messageStore = new Map();
+function storeMessage(keyId, message) {
+  if (!keyId || !message) return;
+  if (messageStore.size > 2000) {
+    const firstKey = messageStore.keys().next().value;
+    messageStore.delete(firstKey);
+  }
+  messageStore.set(keyId, message);
+}
+
+const msgRetryCounterCache = {
+  _cache: new Map(),
+  get(key) {
+    return this._cache.get(key);
+  },
+  set(key, value) {
+    if (this._cache.size > 2000) {
+      const first = this._cache.keys().next().value;
+      this._cache.delete(first);
+    }
+    this._cache.set(key, value);
+  },
+  del(key) {
+    this._cache.delete(key);
+  }
+};
+
+// Penyimpanan LID akun sendiri untuk pengiriman pesan ke nomor sendiri (Self Chat)
+const SELF_LID_FILE = path.resolve(__dirname, 'data', 'self-lid.json');
+let knownSelfLid = null;
+try {
+  if (fs.existsSync(SELF_LID_FILE)) {
+    const raw = JSON.parse(fs.readFileSync(SELF_LID_FILE, 'utf-8'));
+    if (raw && raw.lid) {
+      knownSelfLid = raw.lid;
+    }
+  }
+} catch {}
+
+function saveSelfLid(lid) {
+  if (!lid || typeof lid !== 'string' || !lid.endsWith('@lid')) return;
+  const cleanLid = lid.split(':')[0].split('@')[0] + '@lid';
+  if (knownSelfLid === cleanLid) return;
+  knownSelfLid = cleanLid;
+  try {
+    fs.mkdirSync(path.dirname(SELF_LID_FILE), { recursive: true });
+    fs.writeFileSync(SELF_LID_FILE, JSON.stringify({ lid: cleanLid }, null, 2));
+  } catch {}
+}
+
+function normalizeConsoleJid(rawTarget, sock = currentSock) {
   if (!rawTarget) return null;
   let target = rawTarget.trim();
 
-  // Keyword 'me' atau 'self' -> nomor bot sendiri
+  const meId = sock?.user?.id || '';
+  const meLid = sock?.user?.lid || '';
+
+  const cleanMeNumber = meId ? meId.split(':')[0].split('@')[0].replace(/[^0-9]/g, '') : '';
+  const cleanMeLid = meLid ? meLid.split(':')[0].split('@')[0] + '@lid' : (knownSelfLid || null);
+  const cleanOwnerNumber = config.ownerNumber ? config.ownerNumber.replace(/[^0-9]/g, '') : '';
+
+  // Keyword 'me' atau 'self' -> nomor/chat bot sendiri
   if (target.toLowerCase() === 'me' || target.toLowerCase() === 'self') {
-    if (currentSock?.user?.id) {
-      const myNumber = currentSock.user.id.split(':')[0].split('@')[0];
-      return myNumber + '@s.whatsapp.net';
-    }
-    return config.ownerNumber ? config.ownerNumber.replace(/[^0-9]/g, '') + '@s.whatsapp.net' : null;
+    if (cleanMeLid) return cleanMeLid;
+    if (cleanMeNumber) return cleanMeNumber + '@s.whatsapp.net';
+    return cleanOwnerNumber ? cleanOwnerNumber + '@s.whatsapp.net' : null;
   }
 
   // Keyword 'owner' -> nomor owner di config
   if (target.toLowerCase() === 'owner') {
-    return config.ownerNumber ? config.ownerNumber.replace(/[^0-9]/g, '') + '@s.whatsapp.net' : null;
+    if (cleanOwnerNumber === cleanMeNumber && cleanMeLid) {
+      return cleanMeLid;
+    }
+    return cleanOwnerNumber ? cleanOwnerNumber + '@s.whatsapp.net' : null;
   }
 
-  // Jika sudah memiliki suffix JID WhatsApp (@s.whatsapp.net, @g.us, @lid)
+  // Jika sudah memiliki suffix JID WhatsApp (@s.whatsapp.net, @g.us, @lid, @newsletter)
   if (target.includes('@')) {
+    // Bersihkan format device suffix jika ada (misal: 12345:1@s.whatsapp.net -> 12345@s.whatsapp.net)
+    target = target.replace(/:[0-9]+@/, '@');
     return target;
   }
 
@@ -194,9 +255,16 @@ function normalizeConsoleJid(rawTarget) {
   let cleanNumber = target.replace(/[^0-9]/g, '');
   if (!cleanNumber) return null;
 
-  // Format 08xx -> 628xx
+  // Format 08xx / 8xx -> 628xx
   if (cleanNumber.startsWith('08')) {
     cleanNumber = '62' + cleanNumber.slice(1);
+  } else if (cleanNumber.startsWith('8')) {
+    cleanNumber = '62' + cleanNumber;
+  }
+
+  // JIKA TARGET ADALAH NOMOR BOT SENDIRI (Self Chat)
+  if (cleanMeNumber && cleanNumber === cleanMeNumber && cleanMeLid) {
+    return cleanMeLid;
   }
 
   return cleanNumber + '@s.whatsapp.net';
@@ -207,13 +275,20 @@ async function validateAndResolveJid(sock, targetRaw) {
     return { valid: false, error: 'Target nomor atau grup wajib diisi.' };
   }
 
-  let jid = normalizeConsoleJid(targetRaw);
+  let jid = normalizeConsoleJid(targetRaw, sock);
   if (!jid) {
     return { valid: false, error: `Format nomor/target "${targetRaw}" tidak valid.` };
   }
 
   if (!sock) {
     return { valid: false, error: 'Koneksi WhatsApp bot belum siap.' };
+  }
+
+  const isSelf = jid.endsWith('@lid');
+
+  // Jika target adalah LID (nomor sendiri / self chat)
+  if (isSelf) {
+    return { valid: true, jid, isLid: true, isSelf: true };
   }
 
   // Jika target adalah grup (@g.us)
@@ -248,7 +323,6 @@ async function validateAndResolveJid(sock, targetRaw) {
       }
     } catch (err) {
       console.warn('[onWhatsApp Check Warning]:', err.message);
-      // Jika terjadi error jaringan sementara pada saat query onWhatsApp, izinkan dengan jid asli
       return { valid: true, jid, warning: err.message };
     }
   }
@@ -414,12 +488,17 @@ function setupConsoleCLI() {
 
     const jid = check.jid;
 
+    const destDesc = check.isSelf ? `nomor sendiri / self chat (${jid})` : jid;
+
     try {
-      console.log(`⏳ [Console] Mengirim pesan ke ${jid}...`);
-      await currentSock.sendMessage(jid, { text: messageText });
-      console.log(`✅ [Console Sukses] Pesan terkirim ke ${jid}: "${messageText}"`);
+      console.log(`⏳ [Console] Mengirim pesan ke ${destDesc}...`);
+      const sent = await currentSock.sendMessage(jid, { text: messageText });
+      if (sent?.key?.id && sent?.message) {
+        storeMessage(sent.key.id, sent.message);
+      }
+      console.log(`✅ [Console Sukses] Pesan terkirim ke ${destDesc}: "${messageText}"`);
     } catch (err) {
-      console.error(`❌ [Console Gagal] Tidak dapat mengirim pesan ke ${jid}:`, err.message);
+      console.error(`❌ [Console Gagal] Tidak dapat mengirim pesan ke ${destDesc}:`, err.message);
     }
   });
 
@@ -469,14 +548,19 @@ function setupConsoleCLI() {
 
           const jid = check.jid;
 
+          const destDesc = check.isSelf ? `nomor sendiri / self chat (${jid})` : jid;
+
           try {
-            console.log(`⏳ [Terminal/CLI] Mengirim pesan ke ${jid}...`);
-            await currentSock.sendMessage(jid, { text: messageText });
-            console.log(`✅ [Terminal/CLI Sukses] Pesan terkirim ke ${jid}: "${messageText}"`);
+            console.log(`⏳ [Terminal/CLI] Mengirim pesan ke ${destDesc}...`);
+            const sent = await currentSock.sendMessage(jid, { text: messageText });
+            if (sent?.key?.id && sent?.message) {
+              storeMessage(sent.key.id, sent.message);
+            }
+            console.log(`✅ [Terminal/CLI Sukses] Pesan terkirim ke ${destDesc}: "${messageText}"`);
             res.writeHead(200, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ success: true, jid, message: messageText }));
+            return res.end(JSON.stringify({ success: true, jid, message: messageText, isSelf: check.isSelf }));
           } catch (err) {
-            console.error(`❌ [Terminal/CLI Gagal] Gagal kirim ke ${jid}:`, err.message);
+            console.error(`❌ [Terminal/CLI Gagal] Gagal kirim ke ${destDesc}:`, err.message);
             res.writeHead(500, { 'Content-Type': 'application/json' });
             return res.end(JSON.stringify({ success: false, error: err.message }));
           }
@@ -517,7 +601,14 @@ async function startBot() {
     auth: state,
     browser: Browsers.macOS('Desktop'),
     syncFullHistory: false,
-    markOnlineOnConnect: false
+    markOnlineOnConnect: false,
+    msgRetryCounterCache,
+    getMessage: async (key) => {
+      if (key?.id) {
+        return messageStore.get(key.id);
+      }
+      return undefined;
+    }
   });
 
   sock.ev.on('connection.update', async (update) => {
@@ -561,6 +652,9 @@ async function startBot() {
 
     for (const msg of messages) {
       if (!msg.message) continue;
+      if (msg.key?.id) {
+        storeMessage(msg.key.id, msg.message);
+      }
       if (msg.key.remoteJid === 'status@broadcast') continue;
 
       const rawMsg = unwrapMessage(msg);
@@ -569,6 +663,10 @@ async function startBot() {
       const sender = msg.key.remoteJid;
       const userKey = msg.key.participant || sender;
       const isFromMe = Boolean(msg.key.fromMe);
+
+      if (sender && sender.endsWith('@lid') && (isFromMe || userKey === sender)) {
+        saveSelfLid(sender);
+      }
 
       // Ambil teks dari berbagai kemungkinan pesan
       let bodyText = '';
