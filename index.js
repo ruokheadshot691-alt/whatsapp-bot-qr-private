@@ -14,6 +14,22 @@ const path = require('path');
 const config = require('./config');
 const { makeSticker, stickerToImage } = require('./src/sticker');
 const { makeBratSticker, makeBratVideoSticker } = require('./src/brat');
+const {
+  makeQcSticker,
+  makeSmemeSticker,
+  makeTtpSticker,
+  makeAttpSticker,
+  getGoogleTts,
+  applyAudioEffect,
+  getGempaBmkg,
+  getWebScreenshot,
+  getTikTokVideo,
+  searchImage,
+  getRandomTebakKata
+} = require('./src/extended');
+
+// Tracking sesi game aktif di chat
+const activeGames = new Map();
 
 const { upscaleImage } = require('./src/hd');
 const {
@@ -375,6 +391,22 @@ async function startBot() {
 
       bodyText = (bodyText || '').trim();
 
+      // Cek apakah ada game Tebak Kata yang sedang aktif di chat ini
+      if (activeGames.has(sender)) {
+        const game = activeGames.get(sender);
+        const guess = bodyText.toLowerCase().trim();
+        if (guess === game.answer) {
+          clearTimeout(game.timer);
+          activeGames.delete(sender);
+          await sock.sendMessage(
+            sender,
+            { text: `🎉 *SELAMAT!* Jawaban kamu BENAR!\nJawaban: *${game.answer.toUpperCase()}* 🏆` },
+            { quoted: msg }
+          );
+          continue;
+        }
+      }
+
       // Hanya proses pesan yang diawali prefix (contoh: .s, .menu)
       if (!bodyText.startsWith(config.prefix)) {
         continue;
@@ -409,7 +441,33 @@ async function startBot() {
             const menuText =
               `⚡ *${config.botName.toUpperCase()}* ⚡\n` +
               `_Prefix Bot: "${config.prefix}"_\n\n` +
-              `🎨 *MEDIA & AI*\n` +
+              `🎨 *STICKER & MEME*\n` +
+              `• *${config.prefix}s* : Bikin foto jadi stiker WA\n` +
+              `• *${config.prefix}qc <teks>* : Stiker gelembung chat (Fake Chat)\n` +
+              `• *${config.prefix}smeme <atas> | <bawah>* : Bikin stiker meme foto\n` +
+              `• *${config.prefix}ttp <teks>* : Stiker teks neon keren\n` +
+              `• *${config.prefix}attp <teks>* : Stiker teks animasi kelap-kelip pelangi\n` +
+              `• *${config.prefix}brat <teks>* : Stiker teks Brat putih\n` +
+              `• *${config.prefix}bratvid <teks>* : Stiker video Brat animasi kata demi kata\n` +
+              `• *${config.prefix}toimg* : Reply stiker jadi foto kembali\n` +
+              `• *${config.prefix}hd* : Tingkatkan kualitas foto ke HD\n\n` +
+              `📥 *DOWNLOADER & PENCARIAN*\n` +
+              `• *${config.prefix}tt <link>* : Download video TikTok tanpa watermark\n` +
+              `• *${config.prefix}pin <kata>* : Cari gambar aesthetic Pinterest / HD\n` +
+              `• *${config.prefix}ssweb <link>* : Screenshot tampilan website\n\n` +
+              `🎙️ *AUDIO & SUARA*\n` +
+              `• *${config.prefix}tts <teks>* : Suara Google Voice Note (Indonesia)\n` +
+              `• *${config.prefix}bass* : Reply audio untuk efek bass boost\n` +
+              `• *${config.prefix}slow* : Reply audio untuk efek slow + reverb\n` +
+              `• *${config.prefix}chipmunk* : Reply audio untuk suara cempreng tupai\n\n` +
+              `🤖 *ARTIFICIAL INTELLIGENCE*\n` +
+              `• *${config.prefix}ai <tanya>* : Tanya AI (Mendukung memori percakapan)\n` +
+              `• *${config.prefix}resetai* : Hapus ingatan percakapan AI\n` +
+              `• *${config.prefix}persona <karakter>* : Atur persona AI pribadi\n` +
+              `• *${config.prefix}persona reset* : Hapus persona khusus\n\n` +
+              `🛠️ *TOOLS & UTILITAS*\n` +
+              `• *${config.prefix}gempa* : Info gempa bumi BMKG terkini + peta\n` +
+              `• *${config.prefix}menfess <nomor> <pesan>* : Kirim pesan rahasia anonim\n` +
               `• *${config.prefix}s* : Bikin foto jadi stiker WA\n` +
               `• *${config.prefix}brat <teks>* : Stiker teks Brat putih\n` +
               `• *${config.prefix}bratvid <teks>* : Stiker video Brat (animasi kata demi kata)\n` +
@@ -431,6 +489,7 @@ async function startBot() {
               `• *${config.prefix}sholat <kota>* : Jadwal sholat harian akurat\n` +
               `• *${config.prefix}surah <1-114>* : Info surah Al-Qur'an lengkap\n\n` +
               `🎲 *GAME & HIBURAN*\n` +
+              `• *${config.prefix}tebakkata* : Game tebak kata berhadiah skor\n` +
               `• *${config.prefix}dadu* : Lempar dadu acak 1-6\n` +
               `• *${config.prefix}koin* : Lempar koin (Gambar/Angka)\n` +
               `• *${config.prefix}apakah <teks>* : Jawaban acak bot\n` +
@@ -520,6 +579,413 @@ async function startBot() {
               console.error('[Brat Video Error]:', err.message);
               await sock.sendMessage(sender, { text: '❌ Gagal membuat stiker video Brat: ' + err.message }, { quoted: msg });
             }
+            break;
+          }
+
+          // ------------------ FITUR BARU: QUOTE CHAT & MEME STICKER ------------------
+          case 'qc': {
+            let targetText = args.join(' ').trim();
+            let authorName = msg.pushName || userKey.split('@')[0] || 'Seseorang';
+
+            const quoted = rawMsg.extendedTextMessage?.contextInfo;
+            if (quoted?.quotedMessage) {
+              const unquoted = unwrapMessage({ message: quoted.quotedMessage });
+              const qText = unquoted?.conversation || unquoted?.extendedTextMessage?.text || '';
+              if (qText) targetText = qText.trim();
+              if (quoted.participant) {
+                authorName = quoted.participant.split('@')[0];
+              }
+            }
+
+            if (!targetText) {
+              await sock.sendMessage(
+                sender,
+                { text: `⚠️ Masukkan kalimat untuk quote atau reply chat orang lain.\nContoh: *${config.prefix}qc kata mutiara hari ini*` },
+                { quoted: msg }
+              );
+              break;
+            }
+
+            try {
+              const qcWebp = makeQcSticker(targetText, authorName);
+              await sock.sendMessage(sender, { sticker: qcWebp }, { quoted: msg });
+            } catch (err) {
+              console.error('[QC Error]:', err.message);
+              await sock.sendMessage(sender, { text: '❌ Gagal membuat stiker Quote Chat: ' + err.message }, { quoted: msg });
+            }
+            break;
+          }
+
+          case 'smeme': {
+            let targetImage = null;
+            if (rawMsg.imageMessage) {
+              targetImage = rawMsg.imageMessage;
+            } else {
+              const quoted = rawMsg.extendedTextMessage?.contextInfo?.quotedMessage;
+              if (quoted) {
+                const unquoted = unwrapMessage({ message: quoted });
+                if (unquoted?.imageMessage) {
+                  targetImage = unquoted.imageMessage;
+                }
+              }
+            }
+
+            if (!targetImage) {
+              await sock.sendMessage(
+                sender,
+                { text: `⚠️ Kirim foto dengan caption atau reply foto dengan format:\n*${config.prefix}smeme teks atas | teks bawah*` },
+                { quoted: msg }
+              );
+              break;
+            }
+
+            const rawText = args.join(' ').trim();
+            const parts = rawText.split('|');
+            const topText = (parts[0] || '').trim();
+            const bottomText = (parts[1] || '').trim();
+
+            if (!topText && !bottomText) {
+              await sock.sendMessage(
+                sender,
+                { text: `⚠️ Masukkan teks meme!\nContoh: *${config.prefix}smeme teks atas | teks bawah*` },
+                { quoted: msg }
+              );
+              break;
+            }
+
+            await sock.sendMessage(sender, { text: '⏳ Sedang membuat stiker meme...' }, { quoted: msg });
+
+            try {
+              const imgBuffer = await getMediaBuffer(targetImage, 'image');
+              const memeWebp = makeSmemeSticker(imgBuffer, topText, bottomText);
+              await sock.sendMessage(sender, { sticker: memeWebp }, { quoted: msg });
+            } catch (err) {
+              console.error('[SMeme Error]:', err.message);
+              await sock.sendMessage(sender, { text: '❌ Gagal membuat stiker meme: ' + err.message }, { quoted: msg });
+            }
+            break;
+          }
+
+          case 'ttp': {
+            const targetText = args.join(' ').trim();
+            if (!targetText) {
+              await sock.sendMessage(
+                sender,
+                { text: `⚠️ Masukkan teks untuk stiker TTP!\nContoh: *${config.prefix}ttp Halo Ganteng*` },
+                { quoted: msg }
+              );
+              break;
+            }
+
+            try {
+              const ttpWebp = makeTtpSticker(targetText);
+              await sock.sendMessage(sender, { sticker: ttpWebp }, { quoted: msg });
+            } catch (err) {
+              console.error('[TTP Error]:', err.message);
+              await sock.sendMessage(sender, { text: '❌ Gagal membuat stiker TTP: ' + err.message }, { quoted: msg });
+            }
+            break;
+          }
+
+          case 'attp': {
+            const targetText = args.join(' ').trim();
+            if (!targetText) {
+              await sock.sendMessage(
+                sender,
+                { text: `⚠️ Masukkan teks untuk stiker animasi ATTP!\nContoh: *${config.prefix}attp Halo Semuanya*` },
+                { quoted: msg }
+              );
+              break;
+            }
+
+            await sock.sendMessage(sender, { text: '⏳ Sedang merender animasi pelangi ATTP...' }, { quoted: msg });
+
+            try {
+              const attpWebp = makeAttpSticker(targetText);
+              await sock.sendMessage(sender, { sticker: attpWebp }, { quoted: msg });
+            } catch (err) {
+              console.error('[ATTP Error]:', err.message);
+              await sock.sendMessage(sender, { text: '❌ Gagal membuat stiker ATTP: ' + err.message }, { quoted: msg });
+            }
+            break;
+          }
+
+          // ------------------ FITUR AUDIO: TTS & AUDIO FX ------------------
+          case 'tts': {
+            const textToSpeak = args.join(' ').trim();
+            if (!textToSpeak) {
+              await sock.sendMessage(
+                sender,
+                { text: `⚠️ Masukkan kalimat yang ingin diucapkan!\nContoh: *${config.prefix}tts Halo selamat pagi semua*` },
+                { quoted: msg }
+              );
+              break;
+            }
+
+            try {
+              const voiceOgg = await getGoogleTts(textToSpeak, 'id');
+              await sock.sendMessage(
+                sender,
+                { audio: voiceOgg, mimetype: 'audio/ogg; codecs=opus', ptt: true },
+                { quoted: msg }
+              );
+            } catch (err) {
+              console.error('[TTS Error]:', err.message);
+              await sock.sendMessage(sender, { text: '❌ Gagal membuat suara TTS: ' + err.message }, { quoted: msg });
+            }
+            break;
+          }
+
+          case 'bass':
+          case 'slow':
+          case 'chipmunk':
+          case 'robot': {
+            let targetAudio = null;
+            if (rawMsg.audioMessage) {
+              targetAudio = rawMsg.audioMessage;
+            } else {
+              const quoted = rawMsg.extendedTextMessage?.contextInfo?.quotedMessage;
+              if (quoted) {
+                const unquoted = unwrapMessage({ message: quoted });
+                if (unquoted?.audioMessage) {
+                  targetAudio = unquoted.audioMessage;
+                }
+              }
+            }
+
+            if (!targetAudio) {
+              await sock.sendMessage(
+                sender,
+                { text: `⚠️ Reply pesan audio atau voice note dengan perintah *${config.prefix}${command}*` },
+                { quoted: msg }
+              );
+              break;
+            }
+
+            await sock.sendMessage(sender, { text: `⏳ Sedang menerapkan efek audio *${command}*...` }, { quoted: msg });
+
+            try {
+              const audioBuffer = await getMediaBuffer(targetAudio, 'audio');
+              const modifiedOgg = applyAudioEffect(audioBuffer, command);
+              await sock.sendMessage(
+                sender,
+                { audio: modifiedOgg, mimetype: 'audio/ogg; codecs=opus', ptt: true },
+                { quoted: msg }
+              );
+            } catch (err) {
+              console.error('[AudioFX Error]:', err.message);
+              await sock.sendMessage(sender, { text: '❌ Gagal memproses efek audio: ' + err.message }, { quoted: msg });
+            }
+            break;
+          }
+
+          // ------------------ FITUR DOWNLOADER & PENCARIAN ------------------
+          case 'tt':
+          case 'tiktok': {
+            const url = args[0] || '';
+            if (!url || (!url.includes('tiktok.com') && !url.includes('douyin.com'))) {
+              await sock.sendMessage(
+                sender,
+                { text: `⚠️ Masukkan link video TikTok yang valid!\nContoh: *${config.prefix}tt https://vt.tiktok.com/xxxxxx/*` },
+                { quoted: msg }
+              );
+              break;
+            }
+
+            await sock.sendMessage(sender, { text: '⏳ Sedang mengunduh video TikTok tanpa watermark...' }, { quoted: msg });
+
+            try {
+              const ttData = await getTikTokVideo(url);
+              await sock.sendMessage(
+                sender,
+                {
+                  video: { url: ttData.videoUrl },
+                  caption: `🎬 *TIKTOK NO WATERMARK*\n\n👤 *Author:* ${ttData.author}\n📝 *Deskripsi:* ${ttData.title}`
+                },
+                { quoted: msg }
+              );
+            } catch (err) {
+              console.error('[TikTok Error]:', err.message);
+              await sock.sendMessage(sender, { text: '❌ Gagal unduh TikTok: ' + err.message }, { quoted: msg });
+            }
+            break;
+          }
+
+          case 'pin':
+          case 'img':
+          case 'pinterest': {
+            const query = args.join(' ').trim();
+            if (!query) {
+              await sock.sendMessage(
+                sender,
+                { text: `⚠️ Masukkan kata kunci gambar!\nContoh: *${config.prefix}pin pemandangan anime estetik*` },
+                { quoted: msg }
+              );
+              break;
+            }
+
+            await sock.sendMessage(sender, { text: `🔍 Sedang mencari gambar "${query}"...` }, { quoted: msg });
+
+            try {
+              const imgUrl = await searchImage(query);
+              await sock.sendMessage(
+                sender,
+                {
+                  image: { url: imgUrl },
+                  caption: `🖼️ Hasil pencarian gambar untuk: *${query}*`
+                },
+                { quoted: msg }
+              );
+            } catch (err) {
+              console.error('[Image Search Error]:', err.message);
+              await sock.sendMessage(sender, { text: '❌ ' + err.message }, { quoted: msg });
+            }
+            break;
+          }
+
+          case 'ssweb':
+          case 'screenshot': {
+            const url = args[0] || '';
+            if (!url) {
+              await sock.sendMessage(
+                sender,
+                { text: `⚠️ Masukkan alamat URL website!\nContoh: *${config.prefix}ssweb google.com*` },
+                { quoted: msg }
+              );
+              break;
+            }
+
+            await sock.sendMessage(sender, { text: '⏳ Sedang mengambil screenshot website...' }, { quoted: msg });
+
+            try {
+              const ssBuffer = await getWebScreenshot(url);
+              await sock.sendMessage(
+                sender,
+                {
+                  image: ssBuffer,
+                  caption: `📸 Screenshot website: *${url}*`
+                },
+                { quoted: msg }
+              );
+            } catch (err) {
+              console.error('[SSWeb Error]:', err.message);
+              await sock.sendMessage(sender, { text: '❌ ' + err.message }, { quoted: msg });
+            }
+            break;
+          }
+
+          // ------------------ FITUR UTILITAS: GEMPA & MENFESS ------------------
+          case 'gempa': {
+            await sock.sendMessage(sender, { text: '⏳ Mengambil data gempa BMKG terkini...' }, { quoted: msg });
+
+            try {
+              const gempa = await getGempaBmkg();
+              await sock.sendMessage(
+                sender,
+                {
+                  image: { url: gempa.mapUrl },
+                  caption: gempa.caption
+                },
+                { quoted: msg }
+              );
+            } catch (err) {
+              console.error('[Gempa Error]:', err.message);
+              await sock.sendMessage(sender, { text: '❌ Gagal mengambil data gempa: ' + err.message }, { quoted: msg });
+            }
+            break;
+          }
+
+          case 'menfess':
+          case 'confess': {
+            if (args.length < 2) {
+              await sock.sendMessage(
+                sender,
+                { text: `⚠️ Format salah!\nContoh: *${config.prefix}menfess 081234567890 Halo, ini dari pengagum rahasiamu!*` },
+                { quoted: msg }
+              );
+              break;
+            }
+
+            const rawTarget = args[0];
+            const targetJid = normalizeConsoleJid(rawTarget);
+            const pesanMenfess = args.slice(1).join(' ').trim();
+
+            if (!targetJid || !pesanMenfess) {
+              await sock.sendMessage(
+                sender,
+                { text: '⚠️ Nomor tujuan atau isi pesan menfess tidak valid!' },
+                { quoted: msg }
+              );
+              break;
+            }
+
+            try {
+              const menfessText =
+                `💌 *PESAN MENFESS RAHASIA* 💌\n\n` +
+                `Ada seseorang yang menitipkan pesan rahasia untuk kamu:\n` +
+                `━━━━━━━━━━━━━━━━━━━━━━\n` +
+                `"${pesanMenfess}"\n` +
+                `━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                `_Pesan ini dikirimkan secara anonim melalui bot._`;
+
+              await sock.sendMessage(targetJid, { text: menfessText });
+              await sock.sendMessage(
+                sender,
+                { text: `✅ Pesan menfess rahasia berhasil dikirimkan ke target!` },
+                { quoted: msg }
+              );
+            } catch (err) {
+              console.error('[Menfess Error]:', err.message);
+              await sock.sendMessage(
+                sender,
+                { text: `❌ Gagal mengirim menfess: ${err.message}` },
+                { quoted: msg }
+              );
+            }
+            break;
+          }
+
+          // ------------------ FITUR GAME: TEBAK KATA ------------------
+          case 'tebakkata': {
+            if (activeGames.has(sender)) {
+              await sock.sendMessage(
+                sender,
+                { text: '⚠️ Masih ada permainan yang sedang berlangsung di chat ini! Jawab dulu atau tunggu waktu habis.' },
+                { quoted: msg }
+              );
+              break;
+            }
+
+            const q = getRandomTebakKata();
+            const timer = setTimeout(async () => {
+              if (activeGames.has(sender)) {
+                const game = activeGames.get(sender);
+                activeGames.delete(sender);
+                try {
+                  await sock.sendMessage(sender, {
+                    text: `⌛ *WAKTU HABIS!* \nJawaban tebak kata sebelumnya adalah: *${game.answer.toUpperCase()}*`
+                  });
+                } catch {}
+              }
+            }, 60000);
+
+            activeGames.set(sender, {
+              answer: q.jawaban.toLowerCase().trim(),
+              timer
+            });
+
+            await sock.sendMessage(
+              sender,
+              {
+                text:
+                  `🎮 *TEBAK KATA* 🎮\n\n` +
+                  `❓ *Pertanyaan:* ${q.soal}\n` +
+                  `💡 *Petunjuk:* \`${q.clue}\`\n\n` +
+                  `⏱️ *Waktu:* 60 detik\n` +
+                  `_Ketik jawaban kamu langsung di chat ini!_`
+              },
+              { quoted: msg }
+            );
             break;
           }
 
