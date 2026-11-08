@@ -697,15 +697,19 @@ async function startBot() {
   const rawSendMessage = sock.sendMessage.bind(sock);
   sock.sendMessage = async (jid, content, options = {}) => {
     try {
-      if (typeof sock.sendPresenceUpdate === 'function' && !jid.endsWith('@g.us')) {
-        await sock.sendPresenceUpdate('composing', jid).catch(() => {});
-      }
-    } catch {}
-    const res = await rawSendMessage(jid, content, options);
-    if (res) {
-      cacheMessage(res);
+      const res = await rawSendMessage(jid, content, options);
+      if (res) cacheMessage(res);
+      return res;
+    } finally {
+      // Jangan mengirim composing di wrapper umum: pengiriman console/fitur lain
+      // tidak punya siklus UI untuk menutupnya dan penerima bisa melihat bot terus mengetik.
+      // Perintah chat yang memang menunjukkan typing mengelolanya terpisah dan mengirim paused.
+      try {
+        if (typeof sock.sendPresenceUpdate === 'function' && !jid.endsWith('@g.us')) {
+          await sock.sendPresenceUpdate('paused', jid).catch(() => {});
+        }
+      } catch {}
     }
-    return res;
   };
 
   sock.ev.on('connection.update', async (update) => {
