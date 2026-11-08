@@ -1,3 +1,4 @@
+const http = require('http');
 const readline = require('readline');
 const {
   default: makeWASocket,
@@ -201,6 +202,58 @@ function normalizeConsoleJid(rawTarget) {
   return cleanNumber + '@s.whatsapp.net';
 }
 
+
+function setupAutoBashIntegration() {
+  const sendJsPath = path.resolve(__dirname, 'send.js');
+  const sendBinPath = path.resolve(__dirname, 'send');
+
+  try { fs.chmodSync(sendBinPath, 0o755); } catch {}
+  try { fs.chmodSync(sendJsPath, 0o755); } catch {}
+
+  // 1. Pasang di node_modules/.bin/send (karena container Node sering masukkan ini ke PATH)
+  try {
+    const nmBin = path.resolve(__dirname, 'node_modules', '.bin');
+    fs.mkdirSync(nmBin, { recursive: true });
+    const nmSend = path.join(nmBin, 'send');
+    if (!fs.existsSync(nmSend)) {
+      try {
+        fs.symlinkSync(sendBinPath, nmSend);
+      } catch {
+        fs.copyFileSync(sendBinPath, nmSend);
+      }
+    }
+    try { fs.chmodSync(nmSend, 0o755); } catch {}
+  } catch {}
+
+  // 2. Coba pasang di /usr/local/bin/send (jika container mengizinkan write)
+  try {
+    const usrSend = '/usr/local/bin/send';
+    if (!fs.existsSync(usrSend)) {
+      try {
+        fs.symlinkSync(sendBinPath, usrSend);
+      } catch {
+        fs.copyFileSync(sendBinPath, usrSend);
+      }
+      try { fs.chmodSync(usrSend, 0o755); } catch {}
+    }
+  } catch {}
+
+  // 3. Tambahkan alias di ~/.bashrc dan /home/container/.bashrc
+  const homeDirs = [process.env.HOME, '/home/container', '/root'].filter(Boolean);
+  for (const h of homeDirs) {
+    try {
+      const bashrc = path.join(h, '.bashrc');
+      if (fs.existsSync(bashrc)) {
+        let rc = fs.readFileSync(bashrc, 'utf-8');
+        if (!rc.includes('alias send=') && !rc.includes('send()')) {
+          rc += `\nalias send="node ${sendJsPath}"\nexport PATH="$PATH:${path.dirname(sendJsPath)}:${path.resolve(__dirname, 'node_modules', '.bin')}"\n`;
+          fs.writeFileSync(bashrc, rc, 'utf-8');
+        }
+      }
+    } catch {}
+  }
+}
+
 function setupConsoleCLI() {
   const rl = readline.createInterface({
     input: process.stdin,
@@ -310,6 +363,75 @@ function setupConsoleCLI() {
   rl.on('error', (err) => {
     console.error('[Console CLI Error]:', err.message);
   });
+
+  // Jalankan integrasi bash terminal otomatis
+  setupAutoBashIntegration();
+
+  // HTTP IPC Server pada 127.0.0.1:45678 untuk menerima perintah send dari bash terminal
+  try {
+    const ipcServer = http.createServer(async (req, res) => {
+      const url = new URL(req.url, 'http://127.0.0.1:45678');
+      if (url.pathname === '/send') {
+        let body = '';
+        req.on('data', chunk => body += chunk);
+        req.on('end', async () => {
+          let targetRaw = url.searchParams.get('to') || url.searchParams.get('target');
+          let messageText = url.searchParams.get('msg') || url.searchParams.get('message') || url.searchParams.get('text');
+
+          if (body) {
+            try {
+              const parsed = JSON.parse(body);
+              targetRaw = parsed.target || parsed.to || targetRaw;
+              messageText = parsed.message || parsed.msg || parsed.text || messageText;
+            } catch {}
+          }
+
+          if (!targetRaw || !messageText) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ success: false, error: 'Target nomor dan pesan wajib diisi.' }));
+          }
+
+          if (!currentSock || !currentSock.user) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ success: false, error: 'Bot belum login atau belum terhubung ke WhatsApp.' }));
+          }
+
+          const jid = normalizeConsoleJid(targetRaw);
+          if (!jid) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ success: false, error: `Nomor/target "${targetRaw}" tidak valid.` }));
+          }
+
+          try {
+            console.log(`⏳ [Terminal/CLI] Mengirim pesan ke ${jid}...`);
+            await currentSock.sendMessage(jid, { text: messageText });
+            console.log(`✅ [Terminal/CLI Sukses] Pesan terkirim ke ${jid}: "${messageText}"`);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ success: true, jid, message: messageText }));
+          } catch (err) {
+            console.error(`❌ [Terminal/CLI Gagal] Gagal kirim ke ${jid}:`, err.message);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ success: false, error: err.message }));
+          }
+        });
+        return;
+      }
+
+      if (url.pathname === '/status') {
+        const isConnected = !!(currentSock && currentSock.user);
+        const botNum = currentSock?.user?.id ? currentSock.user.id.split(':')[0] : 'Belum login';
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ connected: isConnected, number: botNum, uptime: process.uptime() }));
+      }
+
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Endpoint tidak ditemukan' }));
+    });
+
+    ipcServer.listen(45678, '127.0.0.1', () => {});
+    ipcServer.on('error', () => {});
+  } catch {}
+
 }
 
 async function startBot() {
@@ -354,10 +476,13 @@ async function startBot() {
       currentSock = sock;
       console.log('========================================');
       console.log('✅ Bot WhatsApp Berhasil Terhubung & Aktif!');
-      console.log('💡 [Console Panel Aktif] Ketik langsung di console bot-hosting:');
-      console.log('   send <nomor/grup> <pesan>');
-      console.log('   Contoh: send 081234567890 Halo dari console!');
-      console.log('   Ketik "help" untuk daftar perintah console.');
+      console.log('💡 [Console / Terminal Shell Aktif]');
+      console.log('   Jika di terminal bash (~ $):');
+      console.log('   👉 ./send <nomor> <pesan>       (Contoh: ./send 085281929641 halo)');
+      console.log('   👉 node send.js <nomor> <pesan> (Contoh: node send.js 085281929641 halo)');
+      console.log('   👉 send <nomor> <pesan>');
+      console.log('   Jika di input console bot-hosting langsung:');
+      console.log('   👉 send <nomor> <pesan>  |  help');
       console.log('========================================');
     }
   });
