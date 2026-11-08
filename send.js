@@ -5,6 +5,7 @@
  * Berkomunikasi dengan bot yang sedang aktif via local HTTP IPC (port 45678).
  *
  * Contoh penggunaan:
+ *   send me Halo pesan untuk nomor bot sendiri!
  *   send 085281929641 Halo apa kabar!
  *   ./send 085281929641 Halo apa kabar!
  *   node send.js 085281929641 Halo apa kabar!
@@ -17,9 +18,10 @@ if (args.length < 2) {
   console.log('⚠️ Format penggunaan salah!');
   console.log('   send <nomor/target> <pesan>');
   console.log('Contoh:');
+  console.log('   send me Halo ini catatan untuk bot sendiri');
   console.log('   send 085281929641 Halo ini pesan dari console!');
+  console.log('   send 1203630234567890@g.us Halo semua anggota grup!');
   console.log('   send owner Halo owner bot!');
-  console.log('   send me Catatan untuk nomor bot sendiri');
   process.exit(1);
 }
 
@@ -45,7 +47,8 @@ const req = http.request({
     try {
       const resp = JSON.parse(body);
       if (resp.success) {
-        console.log(`✅ [Sukses Terkirim] Pesan ke ${resp.jid || target}: "${message}"`);
+        const dest = resp.isSelf ? `${resp.jid} (Nomor Sendiri)` : (resp.jid || target);
+        console.log(`✅ [Sukses Terkirim] Pesan ke ${dest}: "${message}"`);
       } else {
         console.error(`❌ [Gagal Mengirim]: ${resp.error || 'Terjadi kesalahan'}`);
       }
