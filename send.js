@@ -22,7 +22,7 @@ if (args.length < 2) {
   console.log('Contoh:');
   console.log('   send me .menu                        (Tampilkan menu bot ke WA sendiri)');
   console.log('   send me .ping                        (Cek kecepatan respon bot)');
-  console.log('   send me .ai siapa penemu internet?   (Tanya AI)');
+  console.log('   send me .ai siapa penemu internet?   (Tanya AI & tampilkan jawaban di console)');
   console.log('   send 085281929641 Halo ini pesan dari console!');
   console.log('   send 1203630234567890@g.us .menu     (Kirim menu ke grup)');
   console.log('   send owner Halo owner bot!');
@@ -43,7 +43,7 @@ const req = http.request({
     'Content-Type': 'application/json',
     'Content-Length': Buffer.byteLength(data)
   },
-  timeout: 10000
+  timeout: 60000 // 60 detik agar cukup untuk AI / pengolahan media
 }, (res) => {
   let body = '';
   res.on('data', chunk => body += chunk);
@@ -54,7 +54,11 @@ const req = http.request({
         const dest = resp.isSelf ? `${resp.jid} (Nomor Sendiri)` : (resp.jid || target);
         console.log(`✅ [Sukses Terkirim] Pesan ke ${dest}: "${message}"`);
         if (resp.isCommand) {
-          console.log(`⚙️ [Command Diproses] Perintah bot "${message}" otomatis dieksekusi oleh bot!`);
+          if (resp.replyText) {
+            console.log(`\n${resp.command}: ${resp.replyText}`);
+          } else {
+            console.log(`⚙️ [Command Selesai] Perintah "${message}" selesai diproses.`);
+          }
         }
       } else {
         console.error(`❌ [Gagal Mengirim]: ${resp.error || 'Terjadi kesalahan'}`);
