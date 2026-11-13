@@ -192,6 +192,36 @@ const recentMessagePerJid = new Map();
 const chatHistoryPerJid = new Map();
 const sentBotMessagesPerJid = new Map();
 const SENT_MESSAGES_FILE = path.resolve(__dirname, 'data', 'sent-bot-messages.json');
+const MESSAGE_STORE_FILE = path.resolve(__dirname, 'data', 'message-store.json');
+
+try {
+  if (fs.existsSync(MESSAGE_STORE_FILE)) {
+    const saved = JSON.parse(fs.readFileSync(MESSAGE_STORE_FILE, 'utf8'));
+    for (const [id, msg] of Object.entries(saved)) {
+      if (id && msg) messageStore.set(id, msg);
+    }
+  }
+} catch (err) {
+  console.warn('[MessageStore] Tidak dapat memuat cache pesan:', err?.message || err);
+}
+
+let saveMessageStoreTimer;
+function persistMessageStore() {
+  clearTimeout(saveMessageStoreTimer);
+  saveMessageStoreTimer = setTimeout(() => {
+    try {
+      fs.mkdirSync(path.dirname(MESSAGE_STORE_FILE), { recursive: true });
+      const entries = [...messageStore.entries()].slice(-1000);
+      const saved = Object.fromEntries(entries);
+      const temp = MESSAGE_STORE_FILE + '.tmp';
+      fs.writeFileSync(temp, JSON.stringify(saved), 'utf8');
+      fs.renameSync(temp, MESSAGE_STORE_FILE);
+    } catch (err) {
+      console.warn('[MessageStore] Gagal menyimpan cache pesan:', err?.message || err);
+    }
+  }, 1000);
+  saveMessageStoreTimer.unref?.();
+}
 
 try {
   if (fs.existsSync(SENT_MESSAGES_FILE)) {
@@ -277,8 +307,10 @@ function storeMessage(keyId, message, jid) {
     messageStore.delete(firstKey);
     messageJidStore.delete(firstKey);
   }
-  messageStore.set(keyId, message);
+  const cleanMsg = message.message ? message.message : message;
+  messageStore.set(keyId, cleanMsg);
   if (jid) messageJidStore.set(keyId, normalizeChatJid(jid));
+  persistMessageStore();
 }
 
 const msgRetryCounterCache = {
@@ -659,6 +691,10 @@ async function sendPinterestCarousel(sock, sender, query, msg) {
       };
 
       const waMsg = generateWAMessageFromContent(sender, inner, { userJid, quoted: msg });
+      if (waMsg.key?.id && waMsg.message) {
+        storeMessage(waMsg.key.id, waMsg.message, sender);
+        trackSentBotMessage(sender, waMsg.key);
+      }
       await sock.relayMessage(sender, waMsg.message, {
         messageId: waMsg.key.id,
         additionalNodes: INTERACTIVE_NATIVE_FLOW_NODES
@@ -3177,11 +3213,15 @@ async function startBot() {
     auth: state,
     browser: Browsers.macOS('Desktop'),
     syncFullHistory: false,
-    markOnlineOnConnect: false,
+    markOnlineOnConnect: true,
     msgRetryCounterCache,
+    defaultQueryTimeoutMs: 60000,
+    retryRequestDelayMs: 350,
+    maxMsgRetryCount: 5,
     getMessage: async (key) => {
       if (key?.id) {
-        return messageStore.get(key.id);
+        const msg = messageStore.get(key.id);
+        if (msg) return msg;
       }
       return undefined;
     }
@@ -3192,6 +3232,9 @@ async function startBot() {
     const result = await rawSendMessage(jid, content, options);
     if (result?.key && jid && !content?.react && !content?.delete) {
       trackSentBotMessage(jid, result.key);
+      if (result.message && result.key.id) {
+        storeMessage(result.key.id, result.message, jid);
+      }
     }
     return result;
   };
@@ -3245,6 +3288,14 @@ async function startBot() {
   });
 
   sock.ev.on('creds.update', saveCreds);
+
+  sock.ev.on('messages.update', async (updates) => {
+    for (const update of updates) {
+      if (update.update?.message && update.key?.id) {
+        storeMessage(update.key.id, update.update.message, update.key.remoteJid);
+      }
+    }
+  });
 
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify') return;
