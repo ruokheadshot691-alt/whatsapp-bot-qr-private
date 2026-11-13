@@ -549,7 +549,11 @@ async function transcribeAudio(audioBuffer, lang = 'id-ID') {
     execSync(`ffmpeg -y -i "${inPath}" -ar 16000 -ac 1 "${outPath}"`, { stdio: 'pipe' });
     const flacData = fs.readFileSync(outPath);
 
-    const url = `http://www.google.com/speech-api/v2/recognize?client=chromium&lang=${encodeURIComponent(lang)}&key=AIzaSyBOti4mM-6x9WDnZIjIeyEU21OpBXqWBgw`;
+    const apiKey = process.env.GOOGLE_SPEECH_API_KEY || process.env.GOOGLE_API_KEY || '';
+    if (!apiKey) {
+      throw new Error('Fitur transkrip suara membutuhkan GOOGLE_SPEECH_API_KEY di environment variables');
+    }
+    const url = `http://www.google.com/speech-api/v2/recognize?client=chromium&lang=${encodeURIComponent(lang)}&key=${encodeURIComponent(apiKey)}`;
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'audio/x-flac; rate=16000' },
