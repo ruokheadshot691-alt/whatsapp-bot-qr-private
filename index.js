@@ -900,6 +900,7 @@ async function handleBotCommand(sock, {
           case 'qc': {
             let targetText = args.join(' ').trim();
             let authorName = msg.pushName || userKey.split('@')[0] || 'Seseorang';
+            let targetJid = sender.endsWith('@g.us') ? (msg.key.participant || userKey) : userKey;
 
             const quoted = rawMsg.extendedTextMessage?.contextInfo;
             if (quoted?.quotedMessage) {
@@ -907,7 +908,15 @@ async function handleBotCommand(sock, {
               const qText = unquoted?.conversation || unquoted?.extendedTextMessage?.text || '';
               if (qText) targetText = qText.trim();
               if (quoted.participant) {
+                targetJid = quoted.participant;
                 authorName = quoted.participant.split('@')[0];
+                try {
+                  if (sender.endsWith('@g.us')) {
+                    const groupMeta = await sock.groupMetadata(sender);
+                    const quotedParticipant = groupMeta?.participants?.find(p => p.id === quoted.participant);
+                    if (quotedParticipant?.notify) authorName = quotedParticipant.notify;
+                  }
+                } catch {}
               }
             }
 
@@ -921,7 +930,24 @@ async function handleBotCommand(sock, {
             }
 
             try {
-              const qcWebp = makeQcSticker(targetText, authorName);
+              let avatarBuffer = null;
+              try {
+                if (sock.profilePictureUrl && targetJid) {
+                  const avatarUrl = await sock.profilePictureUrl(targetJid, 'image');
+                  if (avatarUrl) {
+                    const avatarRes = await axios.get(avatarUrl, {
+                      responseType: 'arraybuffer',
+                      timeout: 5000,
+                      maxContentLength: 2 * 1024 * 1024
+                    });
+                    avatarBuffer = Buffer.from(avatarRes.data);
+                  }
+                }
+              } catch (pfpErr) {
+                // Private/no profile picture is normal, fallback to initials badge
+              }
+
+              const qcWebp = await makeQcSticker(targetText, authorName, avatarBuffer);
               await sock.sendMessage(sender, { sticker: qcWebp }, { quoted: msg });
             } catch (err) {
               console.error('[QC Error]:', err.message);
