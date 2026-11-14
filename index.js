@@ -10,6 +10,7 @@ const {
   Browsers,
   prepareWAMessageMedia,
   generateWAMessageFromContent,
+  DEFAULT_CONNECTION_CONFIG,
 } = require('@whiskeysockets/baileys');
 const axios = require('axios');
 const pino = require('pino');
@@ -3609,6 +3610,65 @@ async function restartBotSession(delayMs = 2000) {
   });
 }
 
+
+function cleanupCorruptedSessions(sessionDir) {
+  try {
+    if (!fs.existsSync(sessionDir)) return;
+    const files = fs.readdirSync(sessionDir);
+    for (const file of files) {
+      if (file.startsWith('session-') && file.endsWith('.json')) {
+        const fullPath = path.join(sessionDir, file);
+        try {
+          const raw = fs.readFileSync(fullPath, 'utf-8');
+          const data = JSON.parse(raw);
+          const sessions = data?._sessions;
+          if (sessions && typeof sessions === 'object') {
+            const keys = Object.keys(sessions);
+            if (keys.length > 5 || raw.length > 15000) {
+              console.warn(`[Session Cleanup] Menemukan file session berlebih: ${file} (${keys.length} sesi, ${raw.length} bytes). Menghapus untuk reset bersih.`);
+              fs.unlinkSync(fullPath);
+            }
+          }
+        } catch {}
+      }
+    }
+  } catch (err) {
+    console.warn('[Session Cleanup] Peringatan saat memeriksa folder session:', err?.message || err);
+  }
+}
+
+function makeAutoRepairSignalRepository(auth) {
+  const makeBaseRepo = DEFAULT_CONNECTION_CONFIG?.makeSignalRepository || makeWASocket.makeLibSignalRepository;
+  const baseRepo = typeof makeBaseRepo === 'function' ? makeBaseRepo(auth) : null;
+  if (!baseRepo) return baseRepo;
+
+  return {
+    ...baseRepo,
+    async decryptMessage({ jid, type, ciphertext }) {
+      try {
+        return await baseRepo.decryptMessage({ jid, type, ciphertext });
+      } catch (error) {
+        const errStr = String(error?.message || error);
+        if (
+          errStr.includes('Bad MAC') ||
+          errStr.includes('Key used already') ||
+          errStr.includes('MessageCounterError') ||
+          errStr.includes('No matching sessions')
+        ) {
+          try {
+            const addr = baseRepo.jidToSignalProtocolAddress(jid);
+            console.warn(`[Signal Auto-Repair] Decryption error (${errStr}) untuk ${jid} (${addr}). Menghapus session korup agar dinegosiasikan ulang.`);
+            await auth.keys.set({ session: { [addr]: null } });
+          } catch (delErr) {
+            console.error('[Signal Auto-Repair] Gagal mereset session:', delErr);
+          }
+        }
+        throw error;
+      }
+    }
+  };
+}
+
 async function startBot() {
   let state;
   let saveCreds;
@@ -3631,9 +3691,39 @@ async function startBot() {
     const sessionDir = path.resolve('./session');
     fs.mkdirSync(sessionDir, { recursive: true, mode: 0o700 });
     try { fs.chmodSync(sessionDir, 0o700); } catch {}
+    cleanupCorruptedSessions(sessionDir);
     const auth = await useMultiFileAuthState(sessionDir);
     state = auth.state;
     saveCreds = auth.saveCreds;
+
+    if (state?.keys?.get) {
+      const originalKeysGet = state.keys.get.bind(state.keys);
+      state.keys.get = async (type, ids) => {
+        const res = await originalKeysGet(type, ids);
+        if (type === 'session') {
+          for (const id of ids) {
+            const sessData = res[id];
+            if (sessData && sessData._sessions && typeof sessData._sessions === 'object') {
+              const sessionKeys = Object.keys(sessData._sessions);
+              if (sessionKeys.length > 3) {
+                const openKey = sessionKeys.find(k => sessData._sessions[k]?.indexInfo?.closed === -1);
+                const closedKeys = sessionKeys
+                  .filter(k => k !== openKey)
+                  .sort((a, b) => (sessData._sessions[b]?.indexInfo?.closed || 0) - (sessData._sessions[a]?.indexInfo?.closed || 0));
+                const keepKeys = new Set([openKey, ...closedKeys.slice(0, 1)].filter(Boolean));
+                const pruned = {};
+                for (const k of keepKeys) {
+                  pruned[k] = sessData._sessions[k];
+                }
+                sessData._sessions = pruned;
+                state.keys.set({ session: { [id]: sessData } }).catch(() => {});
+              }
+            }
+          }
+        }
+        return res;
+      };
+    }
     console.log('[Auth] MONGODB_URI belum diatur, memakai sesi lokal ./session.');
   }
   const { version } = await fetchLatestBaileysVersion();
@@ -3645,6 +3735,7 @@ async function startBot() {
     logger: pino({ level: 'silent' }),
     printQRInTerminal: false,
     auth: state,
+    makeSignalRepository: makeAutoRepairSignalRepository,
     browser: Browsers.macOS('Desktop'),
     syncFullHistory: false,
     markOnlineOnConnect: true,
@@ -3670,25 +3761,8 @@ async function startBot() {
   const rawSendMessage = sock.sendMessage.bind(sock);
   sock.sendMessage = async (jid, content, options) => {
     let targetJid = jid;
-    if (typeof targetJid === 'string' && targetJid.endsWith('@lid')) {
-      const botPhone = sock?.user?.id ? sock.user.id.split(':')[0].split('@')[0].replace(/\D/g, '') : '';
-      const botLid = sock?.user?.lid ? sock.user.lid.split(':')[0].split('@')[0] : '';
-      const knownLid = knownSelfLid ? knownSelfLid.split(':')[0].split('@')[0] : '';
-      const digits = targetJid.replace(/\D/g, '');
-
-      if (
-        (botLid && digits === botLid) ||
-        (knownLid && digits === knownLid) ||
-        digits === '89030746222822' ||
-        digits === '181892636766323' ||
-        (botPhone && digits === botPhone)
-      ) {
-        if (botPhone) targetJid = `${botPhone}@s.whatsapp.net`;
-      } else if (lidToPhoneMap.has(normalizeChatJid(targetJid))) {
-        targetJid = lidToPhoneMap.get(normalizeChatJid(targetJid));
-      }
-    }
-
+    // Jaga targetJid tetap asli sesuai thread percakapan (baik @lid, @s.whatsapp.net, maupun @g.us)
+    // agar enkripsi Signal ratchet tidak terpecah/desinkronisasi.
     const result = await rawSendMessage(targetJid, content, options);
     if (result?.key && targetJid && !content?.react && !content?.delete) {
       trackSentBotMessage(targetJid, result.key);
@@ -3799,23 +3873,27 @@ async function startBot() {
       const botLid = sock?.user?.lid ? sock.user.lid.split(':')[0].split('@')[0] : '';
       const knownLid = knownSelfLid ? knownSelfLid.split(':')[0].split('@')[0] : '';
 
-      if (sender && sender.endsWith('@lid')) {
-        const sDigits = sender.replace(/\D/g, '');
+      // Jaga `sender` tetap msg.key.remoteJid (tujuan balasan chat asli).
+      // Normalisasi hanya diaplikasikan pada `userKey` untuk identifikasi hak akses (owner/admin dsb).
+      if (userKey && userKey.endsWith('@lid')) {
+        const uDigits = userKey.replace(/\D/g, '');
+        const botPhone = sock?.user?.id ? sock.user.id.split(':')[0].split('@')[0].replace(/\D/g, '') : '';
+        const botLid = sock?.user?.lid ? sock.user.lid.split(':')[0].split('@')[0] : '';
+        const knownLid = knownSelfLid ? knownSelfLid.split(':')[0].split('@')[0] : '';
+
         if (
           isFromMe ||
-          (botLid && sDigits === botLid) ||
-          (knownLid && sDigits === knownLid) ||
-          sDigits === '89030746222822' ||
-          sDigits === '181892636766323' ||
-          (botPhone && sDigits === botPhone)
+          (botLid && uDigits === botLid) ||
+          (knownLid && uDigits === knownLid) ||
+          uDigits === '89030746222822' ||
+          uDigits === '181892636766323' ||
+          (botPhone && uDigits === botPhone)
         ) {
           if (botPhone) {
-            sender = `${botPhone}@s.whatsapp.net`;
             userKey = `${botPhone}@s.whatsapp.net`;
           }
-        } else if (lidToPhoneMap.has(normalizeChatJid(sender))) {
-          sender = lidToPhoneMap.get(normalizeChatJid(sender));
-          userKey = sender;
+        } else if (lidToPhoneMap.has(normalizeChatJid(userKey))) {
+          userKey = lidToPhoneMap.get(normalizeChatJid(userKey));
         }
       }
 
