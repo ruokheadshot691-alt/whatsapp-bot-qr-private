@@ -194,6 +194,54 @@ const sentBotMessagesPerJid = new Map();
 const SENT_MESSAGES_FILE = path.resolve(__dirname, 'data', 'sent-bot-messages.json');
 const MESSAGE_STORE_FILE = path.resolve(__dirname, 'data', 'message-store.json');
 
+// Pending ticket untuk permintaan izin RVO (View Once) berbasis privasi
+const pendingRvoBySender = new Map();
+const pendingRvoByTicket = new Map();
+
+function extractViewOnceMedia(msgObj) {
+  if (!msgObj) return null;
+  let m = msgObj.message || msgObj;
+  let isViewOnce = false;
+
+  if (m.ephemeralMessage) m = m.ephemeralMessage.message || m;
+  if (m.viewOnceMessage) {
+    isViewOnce = true;
+    m = m.viewOnceMessage.message || m;
+  }
+  if (m.viewOnceMessageV2) {
+    isViewOnce = true;
+    m = m.viewOnceMessageV2.message || m;
+  }
+  if (m.viewOnceMessageV2Extension) {
+    isViewOnce = true;
+    m = m.viewOnceMessageV2Extension.message || m;
+  }
+  if (m.documentWithCaptionMessage) {
+    m = m.documentWithCaptionMessage.message || m;
+  }
+
+  if (m.imageMessage?.viewOnce) isViewOnce = true;
+  if (m.videoMessage?.viewOnce) isViewOnce = true;
+
+  if (m.imageMessage) {
+    return {
+      type: 'image',
+      media: m.imageMessage,
+      caption: m.imageMessage.caption || '',
+      isViewOnce
+    };
+  }
+  if (m.videoMessage) {
+    return {
+      type: 'video',
+      media: m.videoMessage,
+      caption: m.videoMessage.caption || '',
+      isViewOnce
+    };
+  }
+  return null;
+}
+
 try {
   if (fs.existsSync(MESSAGE_STORE_FILE)) {
     const saved = JSON.parse(fs.readFileSync(MESSAGE_STORE_FILE, 'utf8'));
@@ -817,7 +865,7 @@ async function handleBotCommand(sock, {
               `• *${config.prefix}wiki <kata>* : Cari ringkasan di Wikipedia\n` +
               `• *${config.prefix}short <link>* : Buat shortlink TinyURL\n` +
               `• *${config.prefix}cuaca <kota>* : Cek cuaca & suhu kota realtime\n` +
-              `• *${config.prefix}calc <angka>* : Kalkulator (${config.prefix}calc 25*40)\n• *${config.prefix}clearchat <nomor>* : Hapus semua riwayat chat nomor target\n\n` +
+              `• *${config.prefix}calc <angka>* : Kalkulator (${config.prefix}calc 25*40)\n• *${config.prefix}clearchat <nomor>* : Hapus semua riwayat chat nomor target\n• *${config.prefix}rvo* : Buka media Sekali Lihat dengan izin pengirim (60d)\n\n` +
               `⚙️ *MANAJEMEN SESI & AKUN (Owner)*\n` +
               `• *${config.prefix}listsesi* : Lihat nomor WA yang pernah ditautkan\n` +
               `• *${config.prefix}tautkan <nomor>* : Hubungkan kembali ke nomor tersimpan (tanpa QR)\n` +
@@ -1745,6 +1793,215 @@ Contoh:
             const stickerWebp = await makeSticker(buffer);
 
             await sock.sendMessage(sender, { sticker: stickerWebp }, { quoted: msg });
+            break;
+          }
+
+          case 'rvo':
+          case 'readviewonce': {
+            const contextInfo = rawMsg?.extendedTextMessage?.contextInfo;
+            const quoted = contextInfo?.quotedMessage;
+            const stanzaId = contextInfo?.stanzaId;
+
+            if (!quoted && !stanzaId) {
+              await sock.sendMessage(
+                sender,
+                { text: `⚠️ Reply pesan foto atau video *Sekali Lihat (View Once)* dengan perintah *${config.prefix}rvo* untuk meminta izin melihatnya.` },
+                { quoted: msg }
+              );
+              break;
+            }
+
+            let mediaInfo = extractViewOnceMedia(quoted);
+            if ((!mediaInfo || !mediaInfo.isViewOnce) && stanzaId && messageStore.has(stanzaId)) {
+              const storedInfo = extractViewOnceMedia(messageStore.get(stanzaId));
+              if (storedInfo) mediaInfo = storedInfo;
+            }
+
+            if (!mediaInfo || !mediaInfo.isViewOnce) {
+              await sock.sendMessage(
+                sender,
+                { text: '⚠️ Pesan yang di-reply bukan merupakan media Sekali Lihat (View Once) atau medianya sudah kedaluwarsa dari cache.' },
+                { quoted: msg }
+              );
+              break;
+            }
+
+            let targetSenderJid = contextInfo?.participant || (sender.endsWith('@g.us') ? null : sender);
+            if (!targetSenderJid && stanzaId && messageJidStore.has(stanzaId)) {
+              targetSenderJid = messageJidStore.get(stanzaId);
+            }
+            targetSenderJid = normalizeChatJid(targetSenderJid);
+            const requesterJid = normalizeChatJid(userKey);
+
+            if (!targetSenderJid) {
+              await sock.sendMessage(
+                sender,
+                { text: '⚠️ Tidak dapat mengidentifikasi nomor pengirim asli dari media Sekali Lihat ini.' },
+                { quoted: msg }
+              );
+              break;
+            }
+
+            // Opsi Self-Archive: Pengirim adalah pemohon sendiri
+            if (requesterJid === targetSenderJid) {
+              await sock.sendMessage(sender, { text: '⏳ Anda adalah pemilik media ini. Mengirim salinan ke chat pribadi Anda...' }, { quoted: msg });
+              try {
+                const buffer = await getMediaBuffer(mediaInfo.media, mediaInfo.type);
+                const captionText = `🔒 *[Self-Archive View Once]*
+` + (mediaInfo.caption ? `Caption: ${mediaInfo.caption}` : '');
+                if (mediaInfo.type === 'image') {
+                  await sock.sendMessage(requesterJid, { image: buffer, caption: captionText });
+                } else {
+                  await sock.sendMessage(requesterJid, { video: buffer, caption: captionText });
+                }
+                await sock.sendMessage(sender, { text: '✅ Media Sekali Lihat Anda berhasil dikirim ke chat pribadi!' }, { quoted: msg });
+              } catch (err) {
+                console.error('[RVO] Gagal mengunduh media view-once:', err);
+                await sock.sendMessage(sender, { text: '❌ Gagal mengunduh media. File mungkin sudah kedaluwarsa di server WhatsApp.' }, { quoted: msg });
+              }
+              break;
+            }
+
+            // Opsi Permintaan Izin: Pemohon meminta izin dari pengirim asli
+            const ticketKey = stanzaId || `${targetSenderJid}_${Date.now()}`;
+            if (pendingRvoByTicket.has(ticketKey)) {
+              await sock.sendMessage(
+                sender,
+                { text: '⏳ Permintaan izin untuk media ini sedang menunggu konfirmasi pengirim. Mohon tunggu hingga batas waktu 60 detik selesai.' },
+                { quoted: msg }
+              );
+              break;
+            }
+
+            // Pasang timer 60 detik
+            const timer = setTimeout(async () => {
+              pendingRvoByTicket.delete(ticketKey);
+              pendingRvoBySender.delete(targetSenderJid);
+              try {
+                await sock.sendMessage(sender, {
+                  text: `⏱️ *[RVO Dibatalkan]*\nPermintaan izin untuk melihat media Sekali Lihat dari @${targetSenderJid.split('@')[0]} dibatalkan karena tidak ada respon izin dalam 60 detik.`,
+                  mentions: [targetSenderJid, requesterJid]
+                });
+              } catch (err) {
+                console.warn('[RVO] Gagal mengirim pesan timeout:', err?.message || err);
+              }
+            }, 60000);
+            timer.unref?.();
+
+            const ticketData = {
+              ticketKey,
+              requesterJid,
+              targetSenderJid,
+              chatJid: sender,
+              mediaInfo,
+              timer
+            };
+
+            pendingRvoByTicket.set(ticketKey, ticketData);
+            pendingRvoBySender.set(targetSenderJid, ticketData);
+
+            const promptText =
+              `🔒 *[Izin Media Sekali Lihat]*\n\n` +
+              `Halo @${targetSenderJid.split('@')[0]}, pengguna @${requesterJid.split('@')[0]} meminta izin untuk melihat media *Sekali Lihat (View Once)* yang Anda kirim.\n\n` +
+              `• Balas *${config.prefix}izinkan* untuk menyetujui (media dikirim privat ke pemohon).\n` +
+              `• Balas *${config.prefix}tolak* untuk menolak permintaan ini.\n\n` +
+              `⏳ _Permintaan ini otomatis dibatalkan jika tidak direspon dalam 60 detik._`;
+
+            await sock.sendMessage(
+              sender,
+              { text: promptText, mentions: [targetSenderJid, requesterJid] },
+              { quoted: msg }
+            );
+            break;
+          }
+
+          case 'izinkan':
+          case 'acc':
+          case 'agree':
+          case 'ya': {
+            const currentSender = normalizeChatJid(userKey);
+            const ticket = pendingRvoBySender.get(currentSender);
+
+            if (!ticket) {
+              await sock.sendMessage(
+                sender,
+                { text: '⚠️ Tidak ada permintaan izin media .rvo yang sedang menunggu konfirmasi dari Anda.' },
+                { quoted: msg }
+              );
+              break;
+            }
+
+            clearTimeout(ticket.timer);
+            pendingRvoBySender.delete(currentSender);
+            pendingRvoByTicket.delete(ticket.ticketKey);
+
+            await sock.sendMessage(
+              ticket.chatJid,
+              {
+                text: `✅ @${currentSender.split('@')[0]} telah memberikan izin! Mengunduh dan mengirim media ke chat pribadi @${ticket.requesterJid.split('@')[0]}...`,
+                mentions: [currentSender, ticket.requesterJid]
+              },
+              { quoted: msg }
+            );
+
+            try {
+              const buffer = await getMediaBuffer(ticket.mediaInfo.media, ticket.mediaInfo.type);
+              const captionText =
+                `🔒 *[Media Sekali Lihat (View Once)]*\n` +
+                `Pengirim asli: @${currentSender.split('@')[0]}\n` +
+                `Status: Disetujui oleh pengirim\n` +
+                (ticket.mediaInfo.caption ? `Caption asli: ${ticket.mediaInfo.caption}` : '');
+
+              if (ticket.mediaInfo.type === 'image') {
+                await sock.sendMessage(ticket.requesterJid, { image: buffer, caption: captionText, mentions: [currentSender] });
+              } else {
+                await sock.sendMessage(ticket.requesterJid, { video: buffer, caption: captionText, mentions: [currentSender] });
+              }
+
+              if (ticket.chatJid !== ticket.requesterJid) {
+                await sock.sendMessage(ticket.chatJid, {
+                  text: `📬 Media Sekali Lihat telah berhasil dikirim ke chat pribadi @${ticket.requesterJid.split('@')[0]}.`,
+                  mentions: [ticket.requesterJid]
+                });
+              }
+            } catch (err) {
+              console.error('[RVO] Gagal mengunduh atau mengirim media:', err);
+              await sock.sendMessage(
+                ticket.chatJid,
+                { text: `❌ Gagal memproses media. Pastikan @${ticket.requesterJid.split('@')[0]} dapat menerima chat pribadi dari bot.`, mentions: [ticket.requesterJid] }
+              );
+            }
+            break;
+          }
+
+          case 'tolak':
+          case 'reject':
+          case 'deny':
+          case 'tidak': {
+            const currentSender = normalizeChatJid(userKey);
+            const ticket = pendingRvoBySender.get(currentSender);
+
+            if (!ticket) {
+              await sock.sendMessage(
+                sender,
+                { text: '⚠️ Tidak ada permintaan izin media .rvo yang sedang menunggu konfirmasi dari Anda.' },
+                { quoted: msg }
+              );
+              break;
+            }
+
+            clearTimeout(ticket.timer);
+            pendingRvoBySender.delete(currentSender);
+            pendingRvoByTicket.delete(ticket.ticketKey);
+
+            await sock.sendMessage(
+              ticket.chatJid,
+              {
+                text: `❌ @${currentSender.split('@')[0]} menolak permintaan @${ticket.requesterJid.split('@')[0]} untuk melihat media Sekali Lihat. Permintaan dibatalkan.`,
+                mentions: [currentSender, ticket.requesterJid]
+              },
+              { quoted: msg }
+            );
             break;
           }
 
