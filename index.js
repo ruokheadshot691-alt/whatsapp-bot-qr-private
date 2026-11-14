@@ -13,7 +13,6 @@ const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
 const config = require('./config');
-const { displayAsciiBanner } = require('./src/banner');
 
 // Import modular features
 const { 
@@ -1009,14 +1008,6 @@ client.once('ready', () => {
   console.log(`🤖 Logged in as: ${client.user.tag} (ID: ${client.user.id})`);
   console.log(`🌐 Server Terhubung: ${client.guilds.cache.size} server`);
   console.log('========================================');
-  try {
-    if (typeof displayAsciiBanner === "function") {
-      displayAsciiBanner();
-    }
-  } catch (err) {
-    console.warn("Warning banner:", err.message);
-  }
-
   client.user.setActivity({
     name: `${config.prefix}menu | ${config.botName}`,
     type: ActivityType.Playing
