@@ -320,6 +320,62 @@ async function generateQrBuffer(text) {
   }
 }
 
+
+/**
+ * AI Image Generator (Pollinations Flux / Turbo Engine)
+ * @param {string} prompt - Deskripsi gambar
+ * @returns {Promise<Buffer>}
+ */
+async function generateAiImage(prompt) {
+  const cleanPrompt = String(prompt || '').trim();
+  if (!cleanPrompt) throw new Error('Prompt gambar tidak boleh kosong');
+
+  const seed = Math.floor(Math.random() * 10000000);
+  const models = ['flux', 'turbo', 'flux-realism'];
+  let lastErr = null;
+
+  for (const model of models) {
+    try {
+      const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(cleanPrompt)}?width=1024&height=1024&nologo=true&seed=${seed}&model=${model}`;
+      const res = await fetch(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        },
+        signal: AbortSignal.timeout(45000)
+      });
+      if (res.ok) {
+        const arrBuf = await res.arrayBuffer();
+        const buf = Buffer.from(arrBuf);
+        if (buf && buf.length > 2000) {
+          return buf;
+        }
+      }
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+
+  // Fallback standar
+  try {
+    const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(cleanPrompt)}?width=768&height=768&nologo=true&seed=${seed}`;
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+      signal: AbortSignal.timeout(30000)
+    });
+    if (res.ok) {
+      const arrBuf = await res.arrayBuffer();
+      const buf = Buffer.from(arrBuf);
+      if (buf && buf.length > 2000) {
+        return buf;
+      }
+    }
+  } catch (err) {
+    lastErr = err;
+  }
+
+  throw new Error(`Gagal menghasilkan gambar AI: ${lastErr ? lastErr.message : 'Server gambar AI sedang padat'}`);
+}
+
 module.exports = {
   askAI,
   translateText,
@@ -328,5 +384,6 @@ module.exports = {
   getJadwalSholat,
   getWeather,
   shortenUrl,
-  generateQrBuffer
+  generateQrBuffer,
+  generateAiImage
 };
