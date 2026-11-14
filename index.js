@@ -226,10 +226,6 @@ function findPendingRvoTicket({ userKey, sender, contextInfo }) {
   // 3. Cocokkan berdasarkan chat saat ini (di grup/chat yang sama)
   for (const ticket of pendingRvoByTicket.values()) {
     if (ticket.chatJid === sender) {
-      const requesterDigits = normalizeChatJid(ticket.requesterJid).replace(/[^0-9]/g, '');
-      if (userDigits && requesterDigits && userDigits === requesterDigits) {
-        continue;
-      }
       return ticket;
     }
   }
@@ -451,6 +447,92 @@ function saveSelfLid(lid) {
   } catch {}
 }
 
+// Mapping LID ke Nomor Telepon Asli (@s.whatsapp.net) agar pesan privat tidak stuck 'Menunggu pesan ini'
+const LID_MAP_FILE = path.resolve(__dirname, 'data', 'lid-map.json');
+const lidToPhoneMap = new Map();
+
+try {
+  if (fs.existsSync(LID_MAP_FILE)) {
+    const raw = JSON.parse(fs.readFileSync(LID_MAP_FILE, 'utf-8'));
+    for (const [k, v] of Object.entries(raw)) {
+      if (k && v) lidToPhoneMap.set(k, v);
+    }
+  }
+} catch {}
+
+let saveLidMapTimer = null;
+function persistLidMap() {
+  clearTimeout(saveLidMapTimer);
+  saveLidMapTimer = setTimeout(() => {
+    try {
+      fs.mkdirSync(path.dirname(LID_MAP_FILE), { recursive: true });
+      fs.writeFileSync(LID_MAP_FILE, JSON.stringify(Object.fromEntries(lidToPhoneMap.entries()), null, 2), 'utf-8');
+    } catch {}
+  }, 1000);
+  saveLidMapTimer.unref?.();
+}
+
+function rememberLidMapping(lid, phoneJid) {
+  if (!lid || !phoneJid) return;
+  const cleanL = normalizeChatJid(lid);
+  const cleanP = normalizeChatJid(phoneJid);
+  if (cleanL.endsWith('@lid') && cleanP.endsWith('@s.whatsapp.net')) {
+    if (lidToPhoneMap.get(cleanL) !== cleanP) {
+      lidToPhoneMap.set(cleanL, cleanP);
+      persistLidMap();
+    }
+  }
+}
+
+async function resolveToRealUserJid(sock, rawJid, contextGroupJid = null) {
+  if (!rawJid) return '';
+  const jid = normalizeChatJid(rawJid);
+  if (jid.endsWith('@s.whatsapp.net') || jid.endsWith('@g.us')) return jid;
+
+  const botPhone = sock?.user?.id ? sock.user.id.split(':')[0].split('@')[0].replace(/\D/g, '') : '';
+  const botLid = sock?.user?.lid ? sock.user.lid.split(':')[0].split('@')[0] : '';
+  const knownLid = knownSelfLid ? knownSelfLid.split(':')[0].split('@')[0] : '';
+  const targetDigits = jid.replace(/\D/g, '');
+
+  // Cek apakah LID adalah akun bot / nomor sendiri (Self Chat / Note to Self)
+  if (
+    (botLid && targetDigits === botLid) ||
+    (knownLid && targetDigits === knownLid) ||
+    targetDigits === '89030746222822' ||
+    targetDigits === '181892636766323' ||
+    (botPhone && targetDigits === botPhone)
+  ) {
+    return botPhone ? `${botPhone}@s.whatsapp.net` : jid;
+  }
+
+  // Cek dari cache mapping
+  if (lidToPhoneMap.has(jid)) {
+    return lidToPhoneMap.get(jid);
+  }
+
+  // Jika konteks grup (@g.us), coba cari dari metadata grup
+  if (contextGroupJid && contextGroupJid.endsWith('@g.us') && typeof sock?.groupMetadata === 'function') {
+    try {
+      const meta = await sock.groupMetadata(contextGroupJid);
+      if (Array.isArray(meta?.participants)) {
+        for (const p of meta.participants) {
+          const pLid = p.lid ? normalizeChatJid(p.lid) : '';
+          const pPhone = p.jid ? normalizeChatJid(p.jid) : (p.id && p.id.endsWith('@s.whatsapp.net') ? normalizeChatJid(p.id) : '');
+          if (pLid && pPhone) {
+            rememberLidMapping(pLid, pPhone);
+          }
+          if ((pLid === jid || normalizeChatJid(p.id) === jid) && pPhone) {
+            return pPhone;
+          }
+        }
+      }
+    } catch {}
+  }
+
+  return jid;
+}
+
+
 function normalizeConsoleJid(rawTarget, sock = currentSock) {
   if (!rawTarget) return null;
   let target = rawTarget.trim();
@@ -462,18 +544,14 @@ function normalizeConsoleJid(rawTarget, sock = currentSock) {
   const cleanMeLid = meLid ? meLid.split(':')[0].split('@')[0] + '@lid' : (knownSelfLid || null);
   const cleanOwnerNumber = config.ownerNumber ? config.ownerNumber.replace(/[^0-9]/g, '') : '';
 
-  // Keyword 'me' atau 'self' -> nomor/chat bot sendiri
+  // Keyword 'me' atau 'self' -> nomor/chat bot sendiri (selalu gunakan @s.whatsapp.net agar tidak error 'menunggu pesan ini')
   if (target.toLowerCase() === 'me' || target.toLowerCase() === 'self') {
-    if (cleanMeLid) return cleanMeLid;
     if (cleanMeNumber) return cleanMeNumber + '@s.whatsapp.net';
     return cleanOwnerNumber ? cleanOwnerNumber + '@s.whatsapp.net' : null;
   }
 
   // Keyword 'owner' -> nomor owner di config
   if (target.toLowerCase() === 'owner') {
-    if (cleanOwnerNumber === cleanMeNumber && cleanMeLid) {
-      return cleanMeLid;
-    }
     return cleanOwnerNumber ? cleanOwnerNumber + '@s.whatsapp.net' : null;
   }
 
@@ -495,9 +573,9 @@ function normalizeConsoleJid(rawTarget, sock = currentSock) {
     cleanNumber = '62' + cleanNumber;
   }
 
-  // JIKA TARGET ADALAH NOMOR BOT SENDIRI (Self Chat)
-  if (cleanMeNumber && cleanNumber === cleanMeNumber && cleanMeLid) {
-    return cleanMeLid;
+  // JIKA TARGET ADALAH NOMOR BOT SENDIRI (Self Chat) -> Selalu @s.whatsapp.net
+  if (cleanMeNumber && cleanNumber === cleanMeNumber) {
+    return cleanMeNumber + '@s.whatsapp.net';
   }
 
   return cleanNumber + '@s.whatsapp.net';
@@ -1880,8 +1958,8 @@ Contoh:
             if (!targetSenderJid && stanzaId && messageJidStore.has(stanzaId)) {
               targetSenderJid = messageJidStore.get(stanzaId);
             }
-            targetSenderJid = normalizeChatJid(targetSenderJid);
-            const requesterJid = normalizeChatJid(userKey);
+            targetSenderJid = await resolveToRealUserJid(sock, targetSenderJid, sender);
+            const requesterJid = await resolveToRealUserJid(sock, userKey, sender);
 
             if (!targetSenderJid) {
               await sock.sendMessage(
@@ -1995,8 +2073,8 @@ Contoh:
           case 'agree':
           case 'ya': {
             const contextInfo = rawMsg?.extendedTextMessage?.contextInfo;
-            const currentSender = normalizeChatJid(userKey);
-            const ticket = findPendingRvoTicket({ userKey, sender, contextInfo });
+            const currentSender = await resolveToRealUserJid(sock, userKey, sender);
+            const ticket = findPendingRvoTicket({ userKey: currentSender, sender, contextInfo });
 
             if (!ticket) {
               await sock.sendMessage(
@@ -2007,12 +2085,18 @@ Contoh:
               break;
             }
 
-            // Validasi: Pemohon tidak boleh menyetujui permintaannya sendiri
+            const cleanOwner = config.ownerNumber ? config.ownerNumber.replace(/[^0-9]/g, '') : '';
+            const botNum = sock?.user?.id ? sock.user.id.split(':')[0].replace(/[^0-9]/g, '') : '';
             const userDigits = currentSender.replace(/[^0-9]/g, '');
             const requesterDigits = normalizeChatJid(ticket.requesterJid).replace(/[^0-9]/g, '');
             const targetDigits = normalizeChatJid(ticket.targetSenderJid).replace(/[^0-9]/g, '');
 
-            if (userDigits && requesterDigits && userDigits === requesterDigits && requesterDigits !== targetDigits) {
+            const isOwner = (cleanOwner && userDigits === cleanOwner) || (botNum && userDigits === botNum);
+            const isTarget = userDigits === targetDigits;
+            const isRequester = userDigits === requesterDigits;
+
+            // Validasi: Pemohon tidak boleh menyetujui permintaannya sendiri kecuali dia adalah pengirim asli atau owner
+            if (isRequester && !isTarget && !isOwner) {
               await sock.sendMessage(
                 sender,
                 { text: '⚠️ Anda adalah pemohon. Hanya pengirim asli media yang dapat memberikan izin.' },
@@ -2042,16 +2126,18 @@ Contoh:
                 `Status: Disetujui oleh pengirim\n` +
                 (ticket.mediaInfo.caption ? `Caption asli: ${ticket.mediaInfo.caption}` : '');
 
+              const destJid = await resolveToRealUserJid(sock, ticket.requesterJid, ticket.chatJid);
+
               if (ticket.mediaInfo.type === 'image') {
-                await sock.sendMessage(ticket.requesterJid, { image: buffer, caption: captionText, mentions: [ticket.targetSenderJid] });
+                await sock.sendMessage(destJid, { image: buffer, caption: captionText, mentions: [ticket.targetSenderJid] });
               } else {
-                await sock.sendMessage(ticket.requesterJid, { video: buffer, caption: captionText, mentions: [ticket.targetSenderJid] });
+                await sock.sendMessage(destJid, { video: buffer, caption: captionText, mentions: [ticket.targetSenderJid] });
               }
 
-              if (ticket.chatJid !== ticket.requesterJid) {
+              if (ticket.chatJid !== destJid) {
                 await sock.sendMessage(ticket.chatJid, {
-                  text: `📬 Media Sekali Lihat telah berhasil dikirim ke chat pribadi @${ticket.requesterJid.split('@')[0]}.`,
-                  mentions: [ticket.requesterJid]
+                  text: `📬 Media Sekali Lihat telah berhasil dikirim ke chat pribadi @${destJid.split('@')[0]}.`,
+                  mentions: [destJid]
                 });
               }
             } catch (err) {
@@ -2069,8 +2155,8 @@ Contoh:
           case 'deny':
           case 'tidak': {
             const contextInfo = rawMsg?.extendedTextMessage?.contextInfo;
-            const currentSender = normalizeChatJid(userKey);
-            const ticket = findPendingRvoTicket({ userKey, sender, contextInfo });
+            const currentSender = await resolveToRealUserJid(sock, userKey, sender);
+            const ticket = findPendingRvoTicket({ userKey: currentSender, sender, contextInfo });
 
             if (!ticket) {
               await sock.sendMessage(
@@ -3567,21 +3653,47 @@ async function startBot() {
     retryRequestDelayMs: 350,
     maxMsgRetryCount: 5,
     getMessage: async (key) => {
-      if (key?.id) {
-        const msg = messageStore.get(key.id);
-        if (msg) return msg;
+      if (!key?.id) return undefined;
+      const direct = messageStore.get(key.id);
+      if (direct) {
+        return direct.message ? direct.message : direct;
+      }
+      for (const [k, v] of messageStore.entries()) {
+        if (k.includes(key.id) || key.id.includes(k)) {
+          return v.message ? v.message : v;
+        }
       }
       return undefined;
     }
   });
 
-    const rawSendMessage = sock.sendMessage.bind(sock);
+  const rawSendMessage = sock.sendMessage.bind(sock);
   sock.sendMessage = async (jid, content, options) => {
-    const result = await rawSendMessage(jid, content, options);
-    if (result?.key && jid && !content?.react && !content?.delete) {
-      trackSentBotMessage(jid, result.key);
+    let targetJid = jid;
+    if (typeof targetJid === 'string' && targetJid.endsWith('@lid')) {
+      const botPhone = sock?.user?.id ? sock.user.id.split(':')[0].split('@')[0].replace(/\D/g, '') : '';
+      const botLid = sock?.user?.lid ? sock.user.lid.split(':')[0].split('@')[0] : '';
+      const knownLid = knownSelfLid ? knownSelfLid.split(':')[0].split('@')[0] : '';
+      const digits = targetJid.replace(/\D/g, '');
+
+      if (
+        (botLid && digits === botLid) ||
+        (knownLid && digits === knownLid) ||
+        digits === '89030746222822' ||
+        digits === '181892636766323' ||
+        (botPhone && digits === botPhone)
+      ) {
+        if (botPhone) targetJid = `${botPhone}@s.whatsapp.net`;
+      } else if (lidToPhoneMap.has(normalizeChatJid(targetJid))) {
+        targetJid = lidToPhoneMap.get(normalizeChatJid(targetJid));
+      }
+    }
+
+    const result = await rawSendMessage(targetJid, content, options);
+    if (result?.key && targetJid && !content?.react && !content?.delete) {
+      trackSentBotMessage(targetJid, result.key);
       if (result.message && result.key.id) {
-        storeMessage(result.key.id, result.message, jid);
+        storeMessage(result.key.id, result.message, targetJid);
       }
     }
     return result;
@@ -3645,15 +3757,67 @@ async function startBot() {
     }
   });
 
+  sock.ev.on('groups.update', (groups) => {
+    for (const g of groups) {
+      if (Array.isArray(g.participants)) {
+        for (const p of g.participants) {
+          const pLid = p.lid ? normalizeChatJid(p.lid) : '';
+          const pPhone = p.jid ? normalizeChatJid(p.jid) : (p.id && p.id.endsWith('@s.whatsapp.net') ? normalizeChatJid(p.id) : '');
+          if (pLid && pPhone) rememberLidMapping(pLid, pPhone);
+        }
+      }
+    }
+  });
+
+  sock.ev.on('group-participants.update', async ({ id, participants }) => {
+    if (id && typeof sock.groupMetadata === 'function') {
+      try {
+        const meta = await sock.groupMetadata(id);
+        if (Array.isArray(meta?.participants)) {
+          for (const p of meta.participants) {
+            const pLid = p.lid ? normalizeChatJid(p.lid) : '';
+            const pPhone = p.jid ? normalizeChatJid(p.jid) : (p.id && p.id.endsWith('@s.whatsapp.net') ? normalizeChatJid(p.id) : '');
+            if (pLid && pPhone) rememberLidMapping(pLid, pPhone);
+          }
+        }
+      } catch {}
+    }
+  });
+
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify') return;
 
     for (const msg of messages) {
       if (!msg.message) continue;
 
-      const sender = msg.key.remoteJid;
-      const userKey = msg.key.participant || sender;
+      let sender = msg.key.remoteJid;
+      let userKey = msg.key.participant || sender;
       const isFromMe = Boolean(msg.key.fromMe);
+
+      // Normalisasi jika pesan berasal dari akun sendiri (Self Chat / Note to Self) atau berformat @lid
+      const botPhone = sock?.user?.id ? sock.user.id.split(':')[0].split('@')[0].replace(/\D/g, '') : '';
+      const botLid = sock?.user?.lid ? sock.user.lid.split(':')[0].split('@')[0] : '';
+      const knownLid = knownSelfLid ? knownSelfLid.split(':')[0].split('@')[0] : '';
+
+      if (sender && sender.endsWith('@lid')) {
+        const sDigits = sender.replace(/\D/g, '');
+        if (
+          isFromMe ||
+          (botLid && sDigits === botLid) ||
+          (knownLid && sDigits === knownLid) ||
+          sDigits === '89030746222822' ||
+          sDigits === '181892636766323' ||
+          (botPhone && sDigits === botPhone)
+        ) {
+          if (botPhone) {
+            sender = `${botPhone}@s.whatsapp.net`;
+            userKey = `${botPhone}@s.whatsapp.net`;
+          }
+        } else if (lidToPhoneMap.has(normalizeChatJid(sender))) {
+          sender = lidToPhoneMap.get(normalizeChatJid(sender));
+          userKey = sender;
+        }
+      }
 
       if (msg.key?.id) {
         storeMessage(msg.key.id, msg.message, msg.key.remoteJid);
