@@ -41,7 +41,11 @@ const {
   getTikTokVideo,
   searchImage,
   searchImages,
-  getRandomTebakKata
+  getRandomTebakKata,
+  getInstagramMedia,
+  fetchAndExtractText,
+  extractAudioFromVideo,
+  transcribeAudio
 } = require('./src/extended');
 
 // Pastikan direktori data ada
@@ -186,69 +190,93 @@ async function handleCommand({ message, command, args, rawText }) {
     case 'help': {
       const embed = new EmbedBuilder()
         .setColor(config.embedColor || 0x5865F2)
-        .setTitle(`📖 Menu & Daftar Perintah ${config.botName}`)
+        .setTitle(`📖 Menu & Daftar Fitur Lengkap ${config.botName}`)
         .setDescription(`Halo **${authorName}**! Gunakan prefix \`${prefix}\` sebelum setiap perintah.`)
         .addFields(
           {
-            name: '🤖 AI & Persona',
+            name: '🤖 AI & Karakter Persona',
             value: [
-              `\`${prefix}ai <pertanyaan>\` - Tanya AI pintar dengan memori`,
-              `\`${prefix}persona <prompt>\` - Atur watak/karakter khusus AI kamu`,
-              `\`${prefix}mypersona\` - Lihat persona aktif kamu`,
-              `\`${prefix}resetai\` - Hapus riwayat percakapan AI`
+              `\`${prefix}ai <tanya>\` - Tanya AI pintar dengan memori percakapan`,
+              `\`${prefix}ringkas <link/teks>\` - Ringkas artikel web atau teks panjang`,
+              `\`${prefix}persona <watak>\` - Atur custom persona/sifat khusus AI`,
+              `\`${prefix}mypersona\` - Cek persona yang sedang aktif`,
+              `\`${prefix}resetai\` - Bersihkan memori chat AI`
             ].join('\n')
           },
           {
             name: '🎨 Stiker & Olah Media',
             value: [
               `\`${prefix}s\` - Ubah gambar (kirim/reply) jadi stiker WebP`,
-              `\`${prefix}toimg\` - Ubah stiker kembali jadi gambar biasa`,
-              `\`${prefix}hd\` - Tingkatkan resolusi/kualitas foto (AI Upscale)`,
-              `\`${prefix}brat <teks>\` - Buat stiker gaya Brat aesthetic`,
-              `\`${prefix}bratvid <teks>\` - Buat stiker video/GIF Brat animasi`,
-              `\`${prefix}qc <teks>\` - Buat stiker quote chat dengan avatar kamu`,
+              `\`${prefix}toimg\` - Ubah stiker kembali jadi gambar foto`,
+              `\`${prefix}hd\` - Tingkatkan kualitas foto ke HD (AI Upscaler)`,
+              `\`${prefix}brat <teks>\` - Stiker aesthetic teks Brat putih`,
+              `\`${prefix}bratvid <teks>\` - Stiker video/GIF animasi kata Brat`,
+              `\`${prefix}qc <teks>\` - Stiker Fake Chat gelembung WhatsApp`,
               `\`${prefix}smeme <atas|bawah>\` - Buat stiker meme dari gambar`,
-              `\`${prefix}ttp <teks>\` / \`${prefix}attp <teks>\` - Buat stiker teks bergerak/statis`
+              `\`${prefix}ttp <teks>\` / \`${prefix}attp <teks>\` - Stiker teks neon & rainbow`
             ].join('\n')
           },
           {
-            name: '🔊 Audio & Suara',
+            name: '📥 Downloader & Pencarian',
+            value: [
+              `\`${prefix}dl <link>\` - Smart Auto-Downloader (TikTok & IG)`,
+              `\`${prefix}ig <link>\` - Unduh Reels/Video/Foto Instagram`,
+              `\`${prefix}tiktok <link>\` - Unduh video TikTok tanpa watermark`,
+              `\`${prefix}pin <query>\` - Cari gambar di Pinterest`,
+              `\`${prefix}img <query>\` - Cari gambar di Google`,
+              `\`${prefix}ssweb <url>\` - Tangkap layar website jadi gambar`
+            ].join('\n')
+          },
+          {
+            name: '🎙️ Audio & Voice Tools',
             value: [
               `\`${prefix}tts <teks>\` - Ubah teks menjadi suara Google (MP3)`,
+              `\`${prefix}tomp3\` - Reply video untuk diekstrak jadi audio MP3`,
+              `\`${prefix}transkrip\` - Reply pesan suara/audio untuk diubah ke teks`,
               `\`${prefix}bass\`, \`${prefix}slow\`, \`${prefix}robot\`, \`${prefix}chipmunk\` - Efek audio`
             ].join('\n')
           },
           {
-            name: '📥 Pencarian & Download',
+            name: '🛠️ Utilitas & Rahasia',
             value: [
-              `\`${prefix}tiktok <url>\` - Download video TikTok tanpa watermark`,
-              `\`${prefix}pin <query>\` - Cari gambar di Pinterest`,
-              `\`${prefix}img <query>\` - Cari gambar di Google`
-            ].join('\n')
-          },
-          {
-            name: '🛠️ Informasi & Utilitas',
-            value: [
-              `\`${prefix}cuaca <kota>\` - Cek ramalan cuaca kota`,
-              `\`${prefix}sholat <kota>\` - Jadwal sholat hari ini`,
-              `\`${prefix}surah <nomor>\` - Baca ayat Al-Qur'an & artinya`,
-              `\`${prefix}gempa\` - Data gempa bumi terkini BMKG`,
+              `\`${prefix}tr <kode> <teks>\` - Terjemahan bahasa (.tr en halo)`,
+              `\`${prefix}menfess <@user/ID> <pesan>\` - Kirim pesan rahasia anonim`,
+              `\`${prefix}cuaca <kota>\` - Info ramalan cuaca realtime`,
+              `\`${prefix}sholat <kota>\` - Jadwal sholat harian akurat`,
+              `\`${prefix}surah <1-114>\` - Info & ayat Al-Qur'an`,
+              `\`${prefix}gempa\` - Data gempa bumi BMKG terkini + peta`,
               `\`${prefix}wiki <topik>\` - Ringkasan artikel Wikipedia`,
-              `\`${prefix}calc <hitungan>\` - Kalkulator matematika`,
-              `\`${prefix}qr <teks>\` - Buat QR Code`,
-              `\`${prefix}short <url>\` - Perpendek link panjang`,
-              `\`${prefix}ssweb <url>\` - Tangkapan layar web`
+              `\`${prefix}calc <angka>\` - Kalkulator matematika`,
+              `\`${prefix}qr <teks>\` - Buat QR Code gambar`,
+              `\`${prefix}short <link>\` - Perpendek link TinyURL`
             ].join('\n')
           },
           {
-            name: '🎮 Mini Games & Hiburan',
+            name: '🛡️ Moderasi & Kontrol Server',
             value: [
-              `\`${prefix}tebakkata\` - Main kuis tebak kata (waktu 60 detik)`,
-              `\`${prefix}dadu\` - Lempar dadu (1-6)`,
+              `\`${prefix}kick @user [alasan]\` - Tendang member dari server`,
+              `\`${prefix}ban @user [alasan]\` - Blokir member permanen`,
+              `\`${prefix}unban <User_ID>\` - Buka blokir member`,
+              `\`${prefix}mute @user [menit]\` - Timeout / bisukan member`,
+              `\`${prefix}unmute @user\` - Buka kembali bisukan member`,
+              `\`${prefix}clearchat [jumlah]\` - Hapus pesan massal di channel`,
+              `\`${prefix}slowmode <detik>\` - Atur batas kecepatan chat`,
+              `\`${prefix}tagall <pesan>\` - Mention @everyone di server`,
+              `\`${prefix}serverinfo\` - Statistik lengkap server`,
+              `\`${prefix}userinfo [@user]\` - Cek profil & tanggal gabung member`,
+              `\`${prefix}setname <nama>\` - Ganti nickname bot`,
+              `\`${prefix}setdesc <topik>\` - Ganti topik channel`
+            ].join('\n')
+          },
+          {
+            name: '🎲 Mini Games & Hiburan',
+            value: [
+              `\`${prefix}tebakkata\` - Kuis tebak kata berhadiah (60 detik)`,
+              `\`${prefix}dadu\` - Lempar dadu acak 1-6`,
               `\`${prefix}koin\` - Lempar koin (Gambar / Angka)`,
-              `\`${prefix}apakah <tanya>\` - Jawaban acak Ya / Tidak`,
+              `\`${prefix}apakah <tanya>\` - Jawaban acak bot`,
               `\`${prefix}rate <hal>\` - Nilai rating sesuatu (0-100%)`,
-              `\`${prefix}siapakah <pertanyaan>\` - Pilih member acak di server`
+              `\`${prefix}siapakah <pertanyaan>\` - Pilih member acak server`
             ].join('\n')
           },
           {
@@ -256,7 +284,7 @@ async function handleCommand({ message, command, args, rawText }) {
             value: `\`${prefix}ping\` | \`${prefix}runtime\` | \`${prefix}owner\``
           }
         )
-        .setFooter({ text: `${config.botName} • Powered by Discord.js`, iconURL: client.user.displayAvatarURL() })
+        .setFooter({ text: `${config.botName} • Semua Fitur Telah Dikembalikan Lengkap`, iconURL: client.user.displayAvatarURL() })
         .setTimestamp();
 
       await message.reply({ embeds: [embed] });
@@ -941,6 +969,420 @@ async function handleCommand({ message, command, args, rawText }) {
         await message.reply({ content: `❌ Gagal memulai tebak kata: ${err.message}` });
       }
       break;
+    }
+
+    
+    // --- RESTORED COMMANDS: DOWNLOADER ---
+    case 'ig':
+    case 'igdl':
+    case 'instagram': {
+      const url = args[0] || (await getContextText(message, args));
+      if (!url || !url.includes('instagram.com')) {
+        const text = `⚠️ Masukkan link Instagram! Contoh: \`${prefix}ig https://www.instagram.com/reel/...\``;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        return replyTextOutput;
+      }
+      try {
+        await message.channel.sendTyping();
+        const media = await getInstagramMedia(url);
+        if (media && media.url) {
+          const res = await axios.get(media.url, { responseType: 'arraybuffer', timeout: 45000 });
+          const isVideo = media.isVideo || media.url.includes('.mp4');
+          const ext = isVideo ? 'mp4' : 'jpg';
+          const file = new AttachmentBuilder(Buffer.from(res.data), { name: `instagram.${ext}` });
+          await message.reply({
+            content: `✅ **Instagram Downloader**\n${media.caption ? `💬 *${media.caption.slice(0, 150)}...*` : ''}`,
+            files: [file]
+          });
+          replyTextOutput = 'Instagram media berhasil dikirim.';
+        } else {
+          await message.reply({ content: '❌ Tidak dapat menemukan media dari link Instagram tersebut.' });
+        }
+      } catch (err) {
+        await message.reply({ content: `❌ Gagal download Instagram: ${err.message}` });
+      }
+      break;
+    }
+
+    case 'dl': {
+      const url = args[0] || (await getContextText(message, args));
+      if (!url) {
+        const text = `⚠️ Masukkan link media (TikTok / Instagram)! Contoh: \`${prefix}dl <link>\``;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        return replyTextOutput;
+      }
+      if (url.includes('instagram.com')) {
+        return handleCommand({ message, command: 'ig', args: [url], rawText });
+      } else if (url.includes('tiktok.com')) {
+        return handleCommand({ message, command: 'tiktok', args: [url], rawText });
+      } else {
+        await message.reply({ content: '⚠️ Saat ini auto-downloader mendukung link **TikTok** dan **Instagram**!' });
+      }
+      break;
+    }
+
+    // --- RESTORED COMMANDS: AUDIO TOOLS ---
+    case 'tomp3':
+    case 'tovn': {
+      try {
+        await message.channel.sendTyping();
+        const media = await getMediaBuffer(message, args);
+        if (!media || !media.buffer) {
+          const text = '⚠️ Reply atau lampirkan video yang ingin diekstrak audionya!';
+          await message.reply({ content: text });
+          replyTextOutput = text;
+          return replyTextOutput;
+        }
+        const mp3Buf = await extractAudioFromVideo(media.buffer);
+        const file = new AttachmentBuilder(mp3Buf, { name: 'audio.mp3' });
+        await message.reply({ content: '🎵 Audio berhasil diekstrak!', files: [file] });
+        replyTextOutput = 'Audio berhasil diekstrak.';
+      } catch (err) {
+        await message.reply({ content: `❌ Gagal ekstrak audio: ${err.message}` });
+      }
+      break;
+    }
+
+    case 'transkrip':
+    case 'toteks': {
+      try {
+        await message.channel.sendTyping();
+        const media = await getMediaBuffer(message, args);
+        if (!media || !media.buffer) {
+          const text = '⚠️ Reply atau lampirkan pesan suara/audio yang ingin ditranskrip!';
+          await message.reply({ content: text });
+          replyTextOutput = text;
+          return replyTextOutput;
+        }
+        const ext = media.name ? path.extname(media.name).replace('.', '') : 'mp3';
+        const transcript = await transcribeAudio(media.buffer, ext);
+        const text = `🎙️ **Hasil Transkrip Suara:**\n\n"${transcript}"`;
+        await message.reply({ content: text });
+        replyTextOutput = transcript;
+      } catch (err) {
+        await message.reply({ content: `❌ Gagal transkrip audio: ${err.message}` });
+      }
+      break;
+    }
+
+    // --- RESTORED COMMANDS: AI SUMMARY & TRANSLATE ---
+    case 'ringkas':
+    case 'summarize': {
+      let input = args.join(' ').trim();
+      if (!input && message.reference && message.reference.messageId) {
+        input = await getContextText(message, args);
+      }
+      if (!input) {
+        const text = `⚠️ Masukkan link artikel atau teks yang ingin diringkas! Contoh: \`${prefix}ringkas https://kompas.com/...\``;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        return replyTextOutput;
+      }
+      try {
+        await message.channel.sendTyping();
+        let textToSummarize = input;
+        if (/^https?:\/\//i.test(input)) {
+          textToSummarize = await fetchAndExtractText(input);
+        }
+        const prompt = `Tolong ringkaskan teks berikut ini dalam bahasa Indonesia yang padat, jelas, dan mudah dipahami dalam bentuk poin-poin penting:\n\n${textToSummarize.slice(0, 4000)}`;
+        const summary = await askAI(prompt, userId, 'Kamu adalah asisten perangkum teks profesional.');
+        await message.reply({ content: `📝 **Ringkasan:**\n\n${summary}` });
+        replyTextOutput = summary;
+      } catch (err) {
+        await message.reply({ content: `❌ Gagal meringkas: ${err.message}` });
+      }
+      break;
+    }
+
+    case 'tr':
+    case 'translate': {
+      let targetLang = 'id';
+      let textToTr = '';
+
+      if (args.length >= 2 && args[0].length <= 5) {
+        targetLang = args[0].toLowerCase();
+        textToTr = args.slice(1).join(' ');
+      } else if (args.length === 1 && args[0].length <= 5) {
+        targetLang = args[0].toLowerCase();
+        textToTr = await getContextText(message, []);
+      } else {
+        textToTr = args.join(' ');
+      }
+
+      if (!textToTr && message.reference && message.reference.messageId) {
+        textToTr = await getContextText(message, []);
+      }
+
+      if (!textToTr) {
+        const text = `⚠️ Format: \`${prefix}tr <kode_bahasa> <teks>\` atau reply pesan lalu \`${prefix}tr <kode_bahasa>\`\nContoh: \`${prefix}tr en Halo selamat pagi\``;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        return replyTextOutput;
+      }
+
+      try {
+        await message.channel.sendTyping();
+        const translated = await translateText(textToTr, targetLang);
+        const text = `🌐 **Terjemahan (${targetLang.toUpperCase()}):**\n\n${translated}`;
+        await message.reply({ content: text });
+        replyTextOutput = translated;
+      } catch (err) {
+        await message.reply({ content: `❌ Gagal menerjemahkan: ${err.message}` });
+      }
+      break;
+    }
+
+    // --- RESTORED COMMANDS: MENFESS / CONFESS ---
+    case 'menfess':
+    case 'confess': {
+      const targetUser = message.mentions.users.first() || (args[0] && /^\d{17,20}$/.test(args[0]) ? await client.users.fetch(args[0]).catch(() => null) : null);
+      const textMsg = targetUser ? (message.mentions.users.first() ? args.slice(1).join(' ') : args.slice(1).join(' ')) : '';
+
+      if (!targetUser || !textMsg) {
+        const text = `💌 **Format Menfess (Pesan Rahasia Anonim):**\n\`${prefix}menfess @user <pesan kamu>\` atau \`${prefix}menfess <User_ID> <pesan kamu>\``;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        return replyTextOutput;
+      }
+
+      try {
+        const embed = new EmbedBuilder()
+          .setColor(0xFF69B4)
+          .setTitle('💌 Pesan Rahasia Menfess Baru!')
+          .setDescription(`"${textMsg}"`)
+          .setFooter({ text: 'Pengirim dirahasiakan oleh bot • Balas lewat bot tidak tersedia' })
+          .setTimestamp();
+
+        await targetUser.send({ embeds: [embed] });
+
+        if (message.guild && message.deletable) {
+          try { await message.delete(); } catch (_) {}
+        }
+
+        const confirmMsg = await message.channel.send({ content: `✅ Pesan rahasia berhasil dikirimkan ke **${targetUser.tag}**!` });
+        setTimeout(() => confirmMsg.delete().catch(() => {}), 5000);
+        replyTextOutput = 'Menfess terkirim.';
+      } catch (err) {
+        await message.reply({ content: `❌ Gagal mengirim menfess ke user tersebut (mungkin DM ditutup): ${err.message}` });
+      }
+      break;
+    }
+
+    // --- RESTORED COMMANDS: SERVER MODERATION ---
+    case 'kick': {
+      if (!message.guild) return message.reply('⚠️ Perintah ini hanya bisa digunakan di server!');
+      if (!message.member.permissions.has(PermissionsBitField.Flags.KickMembers)) {
+        return message.reply('❌ Kamu tidak memiliki izin `Kick Members`!');
+      }
+      const target = message.mentions.members.first() || (args[0] ? await message.guild.members.fetch(args[0]).catch(() => null) : null);
+      if (!target) return message.reply(`⚠️ Sebutkan member yang ingin di-kick! Contoh: \`${prefix}kick @user [alasan]\``);
+      if (!target.kickable) return message.reply('❌ Bot tidak memiliki hak untuk meng-kick member ini!');
+      const reason = args.slice(1).join(' ') || 'Tidak ada alasan';
+      try {
+        await target.kick(reason);
+        await message.reply(`👢 **${target.user.tag}** berhasil di-kick dari server.\nAlasan: *${reason}*`);
+      } catch (err) {
+        await message.reply({ content: `❌ Gagal kick: ${err.message}` });
+      }
+      break;
+    }
+
+    case 'ban': {
+      if (!message.guild) return message.reply('⚠️ Perintah ini hanya bisa digunakan di server!');
+      if (!message.member.permissions.has(PermissionsBitField.Flags.BanMembers)) {
+        return message.reply('❌ Kamu tidak memiliki izin `Ban Members`!');
+      }
+      const target = message.mentions.members.first() || (args[0] ? await message.guild.members.fetch(args[0]).catch(() => null) : null);
+      if (!target) return message.reply(`⚠️ Sebutkan member yang ingin di-ban! Contoh: \`${prefix}ban @user [alasan]\``);
+      if (!target.bannable) return message.reply('❌ Bot tidak memiliki hak untuk mem-ban member ini!');
+      const reason = args.slice(1).join(' ') || 'Tidak ada alasan';
+      try {
+        await target.ban({ reason });
+        await message.reply(`🔨 **${target.user.tag}** berhasil di-ban dari server.\nAlasan: *${reason}*`);
+      } catch (err) {
+        await message.reply({ content: `❌ Gagal ban: ${err.message}` });
+      }
+      break;
+    }
+
+    case 'unban': {
+      if (!message.guild) return message.reply('⚠️ Perintah ini hanya bisa digunakan di server!');
+      if (!message.member.permissions.has(PermissionsBitField.Flags.BanMembers)) {
+        return message.reply('❌ Kamu tidak memiliki izin `Ban Members`!');
+      }
+      const uId = args[0];
+      if (!uId) return message.reply(`⚠️ Masukkan User ID yang ingin di-unban! Contoh: \`${prefix}unban 1234567890\``);
+      try {
+        await message.guild.bans.remove(uId);
+        await message.reply(`🔓 User ID \`${uId}\` berhasil di-unban!`);
+      } catch (err) {
+        await message.reply({ content: `❌ Gagal unban: ${err.message}` });
+      }
+      break;
+    }
+
+    case 'mute':
+    case 'timeout': {
+      if (!message.guild) return message.reply('⚠️ Perintah ini hanya bisa digunakan di server!');
+      if (!message.member.permissions.has(PermissionsBitField.Flags.ModerateMembers)) {
+        return message.reply('❌ Kamu tidak memiliki izin `Timeout / Moderate Members`!');
+      }
+      const target = message.mentions.members.first() || (args[0] ? await message.guild.members.fetch(args[0]).catch(() => null) : null);
+      if (!target) return message.reply(`⚠️ Sebutkan member! Contoh: \`${prefix}mute @user [menit]\``);
+      const minutes = parseInt(args[1]) || 10;
+      try {
+        await target.timeout(minutes * 60 * 1000, `Mute oleh ${message.author.tag}`);
+        await message.reply(`🔇 **${target.user.tag}** berhasil di-mute selama **${minutes} menit**.`);
+      } catch (err) {
+        await message.reply({ content: `❌ Gagal mute: ${err.message}` });
+      }
+      break;
+    }
+
+    case 'unmute': {
+      if (!message.guild) return message.reply('⚠️ Perintah ini hanya bisa digunakan di server!');
+      if (!message.member.permissions.has(PermissionsBitField.Flags.ModerateMembers)) {
+        return message.reply('❌ Kamu tidak memiliki izin `Timeout / Moderate Members`!');
+      }
+      const target = message.mentions.members.first() || (args[0] ? await message.guild.members.fetch(args[0]).catch(() => null) : null);
+      if (!target) return message.reply(`⚠️ Sebutkan member! Contoh: \`${prefix}unmute @user\``);
+      try {
+        await target.timeout(null);
+        await message.reply(`🔊 **${target.user.tag}** berhasil di-unmute.`);
+      } catch (err) {
+        await message.reply({ content: `❌ Gagal unmute: ${err.message}` });
+      }
+      break;
+    }
+
+    case 'clearchat':
+    case 'purge':
+    case 'clear':
+    case 'delchat':
+    case 'hapuschat': {
+      if (!message.guild) return message.reply('⚠️ Perintah ini hanya bisa digunakan di server!');
+      if (!message.member.permissions.has(PermissionsBitField.Flags.ManageMessages)) {
+        return message.reply('❌ Kamu tidak memiliki izin `Manage Messages`!');
+      }
+      const count = Math.min(Math.max(parseInt(args[0]) || 10, 1), 100);
+      try {
+        const deleted = await message.channel.bulkDelete(count, true);
+        const notice = await message.channel.send(`🧹 Berhasil membersihkan **${deleted.size}** pesan!`);
+        setTimeout(() => notice.delete().catch(() => {}), 4000);
+      } catch (err) {
+        await message.reply({ content: `❌ Gagal menghapus pesan: ${err.message}` });
+      }
+      break;
+    }
+
+    case 'slowmode': {
+      if (!message.guild) return message.reply('⚠️ Perintah ini hanya bisa digunakan di server!');
+      if (!message.member.permissions.has(PermissionsBitField.Flags.ManageChannels)) {
+        return message.reply('❌ Kamu tidak memiliki izin `Manage Channels`!');
+      }
+      const sec = parseInt(args[0]);
+      if (isNaN(sec) || sec < 0) return message.reply(`⚠️ Format: \`${prefix}slowmode <detik>\` (0 untuk mematikan)`);
+      try {
+        await message.channel.setRateLimitPerUser(sec);
+        await message.reply(`⏱️ Slowmode channel diatur ke **${sec} detik**.`);
+      } catch (err) {
+        await message.reply({ content: `❌ Gagal mengatur slowmode: ${err.message}` });
+      }
+      break;
+    }
+
+    case 'tagall':
+    case 'hidetag': {
+      if (!message.guild) return message.reply('⚠️ Perintah ini hanya bisa digunakan di server!');
+      if (!message.member.permissions.has(PermissionsBitField.Flags.MentionEveryone)) {
+        return message.reply('❌ Kamu tidak memiliki izin `Mention Everyone`!');
+      }
+      const pesan = args.join(' ') || 'Perhatian untuk semua member!';
+      await message.channel.send({ content: `@everyone\n📢 **PENGUMUMAN:** ${pesan}` });
+      break;
+    }
+
+    case 'groupinfo':
+    case 'serverinfo': {
+      if (!message.guild) return message.reply('⚠️ Perintah ini hanya bisa digunakan di server!');
+      const guild = message.guild;
+      const owner = await guild.fetchOwner();
+      const embed = new EmbedBuilder()
+        .setColor(0x5865F2)
+        .setTitle(`🏰 Informasi Server: ${guild.name}`)
+        .setThumbnail(guild.iconURL({ size: 256 }) || null)
+        .addFields(
+          { name: '👑 Pemilik Server', value: `${owner.user.tag} (${owner.id})`, inline: true },
+          { name: '👥 Total Member', value: `${guild.memberCount} member`, inline: true },
+          { name: '💬 Total Channel', value: `${guild.channels.cache.size} channel`, inline: true },
+          { name: '🎭 Total Role', value: `${guild.roles.cache.size} role`, inline: true },
+          { name: '🛡️ Tingkat Verifikasi', value: `${guild.verificationLevel}`, inline: true },
+          { name: '📅 Dibuat Pada', value: `<t:${Math.floor(guild.createdTimestamp / 1000)}:R>`, inline: true }
+        )
+        .setFooter({ text: `Server ID: ${guild.id}` })
+        .setTimestamp();
+      await message.reply({ embeds: [embed] });
+      break;
+    }
+
+    case 'userinfo': {
+      const user = message.mentions.users.first() || message.author;
+      const member = message.guild ? await message.guild.members.fetch(user.id).catch(() => null) : null;
+      const embed = new EmbedBuilder()
+        .setColor(0x5865F2)
+        .setTitle(`👤 Info Pengguna: ${user.tag}`)
+        .setThumbnail(user.displayAvatarURL({ size: 256 }))
+        .addFields(
+          { name: '🆔 User ID', value: user.id, inline: true },
+          { name: '🤖 Bot?', value: user.bot ? 'Ya' : 'Bukan', inline: true },
+          { name: '📅 Akun Dibuat', value: `<t:${Math.floor(user.createdTimestamp / 1000)}:R>`, inline: true },
+          ...(member ? [
+            { name: '📥 Bergabung ke Server', value: `<t:${Math.floor(member.joinedTimestamp / 1000)}:R>`, inline: true },
+            { name: '🎭 Role Tertinggi', value: `${member.roles.highest.name}`, inline: true }
+          ] : [])
+        )
+        .setTimestamp();
+      await message.reply({ embeds: [embed] });
+      break;
+    }
+
+    case 'setname': {
+      if (!message.guild) return message.reply('⚠️ Perintah ini hanya bisa digunakan di server!');
+      if (!message.member.permissions.has(PermissionsBitField.Flags.ManageNicknames)) {
+        return message.reply('❌ Kamu tidak memiliki izin `Manage Nicknames`!');
+      }
+      const newName = args.join(' ');
+      if (!newName) return message.reply(`⚠️ Masukkan nama baru bot! Contoh: \`${prefix}setname Bot Keren\``);
+      try {
+        await message.guild.members.me.setNickname(newName);
+        await message.reply(`✅ Nickname bot di server ini diubah menjadi **${newName}**!`);
+      } catch (err) {
+        await message.reply({ content: `❌ Gagal mengubah nama: ${err.message}` });
+      }
+      break;
+    }
+
+    case 'setdesc': {
+      if (!message.guild) return message.reply('⚠️ Perintah ini hanya bisa digunakan di server!');
+      if (!message.member.permissions.has(PermissionsBitField.Flags.ManageChannels)) {
+        return message.reply('❌ Kamu tidak memiliki izin `Manage Channels`!');
+      }
+      const topic = args.join(' ');
+      try {
+        await message.channel.setTopic(topic);
+        await message.reply(`✅ Topik channel berhasil diperbarui!`);
+      } catch (err) {
+        await message.reply({ content: `❌ Gagal mengubah topik channel: ${err.message}` });
+      }
+      break;
+    }
+
+    // --- ALIASES ---
+    case 'bratgif':
+    case 'bratwhite': {
+      return handleCommand({ message, command: 'brat', args, rawText });
     }
 
     default:
