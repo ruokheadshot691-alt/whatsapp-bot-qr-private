@@ -23,7 +23,8 @@ const {
   getJadwalSholat, 
   getWeather, 
   shortenUrl, 
-  generateQrBuffer 
+  generateQrBuffer,
+  generateAiImage
 } = require('./src/tools');
 
 const { makeSticker, stickerToImage } = require('./src/sticker');
@@ -200,7 +201,8 @@ async function handleCommand({ message, command, args, rawText }) {
               `\`${prefix}ringkas <link/teks>\` - Ringkas artikel web atau teks panjang`,
               `\`${prefix}persona <watak>\` - Atur custom persona/sifat khusus AI`,
               `\`${prefix}mypersona\` - Cek persona yang sedang aktif`,
-              `\`${prefix}resetai\` - Bersihkan memori chat AI`
+              `\`${prefix}resetai\` - Bersihkan memori chat AI`,
+              `\`${prefix}aiimg <prompt>\` - Buat gambar estetik berbasis AI (Flux Engine)`
             ].join('\n')
           },
           {
@@ -409,6 +411,55 @@ async function handleCommand({ message, command, args, rawText }) {
       const text = '🧹 Riwayat memori percakapan AI kamu berhasil dibersihkan.';
       await message.reply({ content: text });
       replyTextOutput = text;
+      break;
+    }
+
+    case 'aiimg':
+    case 'imagine':
+    case 'dalle':
+    case 'genimg':
+    case 'txt2img':
+    case 'imageai': {
+      const prompt = await getContextText(message, args);
+      if (!prompt) {
+        const text = `⚠️ Masukkan deskripsi gambar yang ingin dibuat!\nContoh: \`${prefix}aiimg cyber samurai in neo tokyo 4k anime\` atau reply pesan teks.`;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        return replyTextOutput;
+      }
+
+      if (message.channel && message.channel.sendTyping) {
+        message.channel.sendTyping().catch(() => {});
+      }
+
+      let waitMsg = null;
+      try {
+        waitMsg = await message.reply({ content: `🎨 Sedang membuat gambar AI untuk prompt: *"${prompt}"*...\n_Mohon tunggu sebentar ya..._` });
+      } catch {}
+
+      try {
+        const imgBuffer = await generateAiImage(prompt);
+        const attachment = new AttachmentBuilder(imgBuffer, { name: 'ai_generated.jpg' });
+
+        await message.reply({
+          content: `✨ **Hasil AI Image Generator (Flux)**\nPrompt: *${prompt}*\nDiminta oleh: <@${userId}>`,
+          files: [attachment]
+        });
+
+        if (waitMsg && waitMsg.delete) {
+          waitMsg.delete().catch(() => {});
+        }
+
+        replyTextOutput = `[AI Image Generated: ${prompt}]`;
+      } catch (err) {
+        const errText = `❌ Gagal membuat gambar AI: ${err.message}`;
+        if (waitMsg && waitMsg.edit) {
+          await waitMsg.edit({ content: errText }).catch(() => message.reply({ content: errText }));
+        } else {
+          await message.reply({ content: errText });
+        }
+        replyTextOutput = errText;
+      }
       break;
     }
 
