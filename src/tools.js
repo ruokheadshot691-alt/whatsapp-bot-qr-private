@@ -12,7 +12,7 @@ function looksLikeChinese(text) {
 function aiSystemPrompt(persona = '') {
   const selectedPersona = String(persona || '').trim();
   return [
-    'Kamu adalah asisten WhatsApp yang membantu, aman, dan mengikuti instruksi pengguna.',
+    'Kamu adalah asisten Discord yang ramah, cerdas, dan mengikuti instruksi pengguna.',
     'Balas selalu dalam Bahasa Indonesia, kecuali pengguna secara jelas meminta bahasa lain atau sedang meminta terjemahan.',
     'Jangan pernah menjawab dalam Bahasa Mandarin/Tionghoa kecuali pengguna meminta bahasa itu secara eksplisit.',
     selectedPersona ? `Persona yang harus kamu perankan secara konsisten: ${selectedPersona}` : ''
@@ -197,7 +197,7 @@ async function getWikiSummary(query) {
   try {
     const url = `https://id.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(query)}`;
     const res = await fetch(url, {
-      headers: { 'User-Agent': 'WhatsAppBot/1.0 (Mozilla/5.0)' },
+      headers: { 'User-Agent': 'DiscordBot/1.0 (Mozilla/5.0)' },
       signal: AbortSignal.timeout(10000)
     });
     if (!res.ok) throw new Error('Halaman tidak ditemukan');

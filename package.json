@@ -1,7 +1,7 @@
 {
-  "name": "whatsapp-bot-baileys",
+  "name": "tuffbot-discord",
   "version": "1.0.0",
-  "description": "WhatsApp Bot multifitur menggunakan Baileys dengan QR scan, anti-ban protection, .s, .hd, dan berbagai utilitas",
+  "description": "TuffBot Discord - Multi-feature Discord Bot dengan AI, Sticker, Brat, HD, Tools & Game",
   "main": "index.js",
   "type": "commonjs",
   "scripts": {
@@ -9,12 +9,12 @@
     "send": "node send.js"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.7.9",
-    "qrcode-terminal": "^0.12.0",
-    "pino": "^9.5.0",
-    "sharp": "^0.33.5",
     "axios": "^1.7.9",
-    "form-data": "^4.0.1"
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.7",
+    "form-data": "^4.0.1",
+    "pino": "^9.5.0",
+    "sharp": "^0.33.5"
   },
   "bin": {
     "send": "./send"

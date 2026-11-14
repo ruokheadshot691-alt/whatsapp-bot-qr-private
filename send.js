@@ -1,16 +1,15 @@
 #!/usr/bin/env node
 
 /**
- * Script CLI pengirim pesan WhatsApp langsung dari console / bash terminal.
+ * Script CLI pengirim pesan Discord langsung dari console / bash terminal.
  * Berkomunikasi dengan bot yang sedang aktif via local HTTP IPC (port 45678).
  *
  * Contoh penggunaan:
- *   send me .menu
- *   send me .ping
- *   send me .ai siapa penemu internet?
- *   send 085281929641 Halo apa kabar!
- *   ./send 085281929641 Halo apa kabar!
- *   node send.js 085281929641 Halo apa kabar!
+ *   send default .menu                     (Kirim menu ke channel utama server)
+ *   send default .ping                     (Cek kecepatan respon bot)
+ *   send default .ai siapa penemu internet? (Tanya AI & tampilkan jawaban di console)
+ *   send 123456789012345678 Halo semua!   (Kirim pesan ke channel ID tertentu)
+ *   node send.js default .ping
  */
 
 const http = require('http');
@@ -18,14 +17,12 @@ const http = require('http');
 const args = process.argv.slice(2);
 if (args.length < 2) {
   console.log('⚠️ Format penggunaan salah!');
-  console.log('   send <nomor/target> <pesan/command>');
+  console.log('   send <channel_id/default> <pesan/command>');
   console.log('Contoh:');
-  console.log('   send me .menu                        (Tampilkan menu bot ke WA sendiri)');
-  console.log('   send me .ping                        (Cek kecepatan respon bot)');
-  console.log('   send me .ai siapa penemu internet?   (Tanya AI & tampilkan jawaban di console)');
-  console.log('   send 085281929641 Halo ini pesan dari console!');
-  console.log('   send 1203630234567890@g.us .menu     (Kirim menu ke grup)');
-  console.log('   send owner Halo owner bot!');
+  console.log('   send default .menu                       (Kirim menu ke channel pertama)');
+  console.log('   send default .ping                       (Cek ping)');
+  console.log('   send default .ai siapa penemu internet?  (Tanya AI & hasil keluar di console)');
+  console.log('   send 123456789012345678 Halo semuanya!   (Kirim pesan ke channel tertentu)');
   process.exit(1);
 }
 
@@ -43,7 +40,7 @@ const req = http.request({
     'Content-Type': 'application/json',
     'Content-Length': Buffer.byteLength(data)
   },
-  timeout: 60000 // 60 detik agar cukup untuk AI / pengolahan media
+  timeout: 60000 // 60 detik agar cukup untuk respons AI / media
 }, (res) => {
   let body = '';
   res.on('data', chunk => body += chunk);
@@ -51,8 +48,7 @@ const req = http.request({
     try {
       const resp = JSON.parse(body);
       if (resp.success) {
-        const dest = resp.isSelf ? `${resp.jid} (Nomor Sendiri)` : (resp.jid || target);
-        console.log(`✅ [Sukses Terkirim] Pesan ke ${dest}: "${message}"`);
+        console.log(`✅ [Sukses Terkirim] Ke channel ${resp.channelName || target}: "${message}"`);
         if (resp.isCommand) {
           if (resp.replyText) {
             console.log(`\n${resp.command}: ${resp.replyText}`);
@@ -70,7 +66,7 @@ const req = http.request({
 });
 
 req.on('error', (err) => {
-  console.error('❌ Tidak dapat menghubungi bot WhatsApp di 127.0.0.1:45678.');
+  console.error('❌ Tidak dapat menghubungi bot Discord di 127.0.0.1:45678.');
   console.error('   Penyebab: Bot belum aktif berjalan atau sedang restart.');
   console.error('   Pastikan proses bot sedang aktif (node index.js).');
 });

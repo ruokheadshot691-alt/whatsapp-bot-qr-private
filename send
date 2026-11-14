@@ -1,3 +1,2 @@
 #!/usr/bin/env bash
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec node "$SCRIPT_DIR/send.js" "$@"
+node "$(dirname "$0")/send.js" "$@"
