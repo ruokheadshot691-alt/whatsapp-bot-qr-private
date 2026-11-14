@@ -7,6 +7,11 @@ function printPterodactylBanner() {
   console.log(PTERODACTYL_BANNER);
 }
 
+function displayAsciiBanner() {
+  console.log(PTERODACTYL_BANNER);
+}
+
 module.exports = {
+  displayAsciiBanner,
   printPterodactylBanner
 };
