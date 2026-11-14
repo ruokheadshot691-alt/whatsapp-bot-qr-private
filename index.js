@@ -1009,7 +1009,13 @@ client.once('ready', () => {
   console.log(`🤖 Logged in as: ${client.user.tag} (ID: ${client.user.id})`);
   console.log(`🌐 Server Terhubung: ${client.guilds.cache.size} server`);
   console.log('========================================');
-  displayAsciiBanner();
+  try {
+    if (typeof displayAsciiBanner === "function") {
+      displayAsciiBanner();
+    }
+  } catch (err) {
+    console.warn("Warning banner:", err.message);
+  }
 
   client.user.setActivity({
     name: `${config.prefix}menu | ${config.botName}`,
