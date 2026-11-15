@@ -76,6 +76,19 @@ function wrapText(text, maxCharsPerLine = 28, maxLines = 7) {
 }
 
 async function makeQcSticker(text, name = 'Seseorang', avatarBuffer = null) {
+  if (typeof text === 'object' && text !== null) {
+    const opts = text;
+    text = opts.text;
+    name = opts.name || name;
+    avatarBuffer = opts.avatarBuffer || avatarBuffer;
+    if (!avatarBuffer && opts.avatarUrl) {
+      try {
+        const axios = require('axios');
+        const res = await axios.get(opts.avatarUrl, { responseType: 'arraybuffer', timeout: 8000 });
+        if (res.status === 200 && res.data) avatarBuffer = Buffer.from(res.data);
+      } catch (_) {}
+    }
+  }
   const cleanName = String(name || 'Seseorang').trim().slice(0, 25);
   const cleanText = String(text || '').trim().slice(0, 250);
   const color = stringToColor(cleanName);
@@ -832,7 +845,272 @@ async function getInstagramMedia(url) {
   return mediaList;
 }
 
+
+/**
+ * 16. FAKE TWEET GENERATOR (.tweet)
+ * Membuat mockup postingan Twitter / X dark mode asli lengkap dengan verified badge, avatar bulat, dan metrik interaksi
+ */
+async function makeFakeTweet({
+  name = 'User',
+  username = 'user',
+  text = '',
+  avatarBuffer = null,
+  retweets = null,
+  quotes = null,
+  likes = null,
+  bookmarks = null
+}) {
+  const cleanName = String(name || 'User').trim().slice(0, 30);
+  const cleanUsername = String(username || 'user').trim().replace(/^@/, '').slice(0, 25);
+  const lines = wrapText(text, 44, 10);
+
+  const cardWidth = 720;
+  const padding = 32;
+  const avatarSize = 60;
+
+  const headerHeight = avatarSize;
+  const textLineHeight = 32;
+  const textBlockHeight = lines.length * textLineHeight;
+  const footerHeight = 150;
+
+  const cardHeight = padding + headerHeight + 20 + textBlockHeight + 20 + footerHeight + padding;
+
+  let circularAvatarBuffer = null;
+  if (avatarBuffer && Buffer.isBuffer(avatarBuffer)) {
+    try {
+      const circleMask = Buffer.from(
+        `<svg width="${avatarSize}" height="${avatarSize}"><circle cx="${avatarSize / 2}" cy="${avatarSize / 2}" r="${avatarSize / 2}" fill="#000"/></svg>`
+      );
+      circularAvatarBuffer = await sharp(avatarBuffer)
+        .resize(avatarSize, avatarSize, { fit: 'cover' })
+        .composite([{ input: circleMask, blend: 'dest-in' }])
+        .png()
+        .toBuffer();
+    } catch (_) {
+      circularAvatarBuffer = null;
+    }
+  }
+
+  const avatarX = padding;
+  const avatarY = padding;
+  const nameX = avatarX + avatarSize + 16;
+  const nameY = avatarY + 24;
+  const handleY = nameY + 22;
+
+  const textStartY = avatarY + avatarSize + 28;
+  const textTspans = lines
+    .map((line, idx) => `<tspan x="${padding}" dy="${idx === 0 ? 0 : textLineHeight}">${escapeXml(line)}</tspan>`)
+    .join('\n');
+
+  const timeY = textStartY + textBlockHeight + 26;
+  const hr1Y = timeY + 18;
+  const statsY = hr1Y + 28;
+  const hr2Y = statsY + 18;
+  const iconsY = hr2Y + 22;
+
+  const now = new Date();
+  const hours = now.getHours();
+  const minutes = String(now.getMinutes()).padStart(2, '0');
+  const ampm = hours >= 12 ? 'PM' : 'AM';
+  const displayHours = hours % 12 || 12;
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const dateStr = `${displayHours}:${minutes} ${ampm} · ${months[now.getMonth()]} ${now.getDate()}, ${now.getFullYear()} · Twitter for iPhone`;
+
+  const fallbackInitials = (cleanName[0] || 'U').toUpperCase();
+
+  const formatNum = (num) => {
+    if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
+    if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
+    return String(num);
+  };
+  const retweetsStr = retweets || formatNum(Math.floor(Math.random() * 25000) + 1200);
+  const quotesStr = quotes || formatNum(Math.floor(Math.random() * 4500) + 320);
+  const likesStr = likes || formatNum(Math.floor(Math.random() * 95000) + 5400);
+  const bookmarksStr = bookmarks || formatNum(Math.floor(Math.random() * 12000) + 850);
+
+  const svg = `
+  <svg width="${cardWidth}" height="${cardHeight}" viewBox="0 0 ${cardWidth} ${cardHeight}" xmlns="http://www.w3.org/2000/svg">
+    <rect width="${cardWidth}" height="${cardHeight}" rx="20" ry="20" fill="#000000" stroke="#2f3336" stroke-width="1.5"/>
+
+    ${circularAvatarBuffer ? '' : `
+      <circle cx="${avatarX + avatarSize / 2}" cy="${avatarY + avatarSize / 2}" r="${avatarSize / 2}" fill="#1d9bf0"/>
+      <text x="${avatarX + avatarSize / 2}" y="${avatarY + avatarSize / 2 + 8}" fill="#ffffff" font-size="24" font-weight="700" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" text-anchor="middle">${escapeXml(fallbackInitials)}</text>
+    `}
+
+    <text x="${nameX}" y="${nameY}" fill="#e7e9ea" font-size="20" font-weight="700" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">${escapeXml(cleanName)}</text>
+
+    <!-- Twitter Verified Badge SVG -->
+    <g transform="translate(${nameX + Math.min(230, cleanName.length * 11 + 6)}, ${nameY - 17})">
+      <path fill="#1d9bf0" d="M19.39 10.22c.31-.93.13-1.93-.54-2.61s-1.68-.85-2.61-.54c-.44-.88-1.28-1.46-2.24-1.46s-1.79.59-2.23 1.46c-.94-.31-1.94-.14-2.62.54s-.84 1.68-.53 2.61c-.88.44-1.47 1.28-1.47 2.24s.59 1.79 1.47 2.23c-.31.94-.14 1.94.53 2.62s1.68.84 2.62.53c.44.88 1.28 1.47 2.23 1.47s1.8-.59 2.24-1.47c.93.31 1.93.13 2.61-.53s.85-1.68.54-2.62c.88-.44 1.46-1.28 1.46-2.23s-.58-1.8-1.46-2.24zm-7.81 5.34l-2.9-2.9 1.21-1.21 1.69 1.69 4.12-4.12 1.21 1.21-5.33 5.33z"/>
+    </g>
+
+    <text x="${nameX}" y="${handleY}" fill="#71767b" font-size="16" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">@${escapeXml(cleanUsername)}</text>
+
+    <!-- X Logo Top Right -->
+    <g transform="translate(${cardWidth - padding - 28}, ${avatarY + 6}) scale(1.2)">
+      <path fill="#71767b" d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+    </g>
+
+    <!-- Tweet Body Text -->
+    <text x="${padding}" y="${textStartY}" fill="#e7e9ea" font-size="22" font-weight="400" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+      ${textTspans}
+    </text>
+
+    <!-- Timestamp -->
+    <text x="${padding}" y="${timeY}" fill="#71767b" font-size="15" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">${escapeXml(dateStr)}</text>
+
+    <!-- Divider 1 -->
+    <line x1="${padding}" y1="${hr1Y}" x2="${cardWidth - padding}" y2="${hr1Y}" stroke="#2f3336" stroke-width="1"/>
+
+    <!-- Stats Row -->
+    <text x="${padding}" y="${statsY}" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="15">
+      <tspan fill="#e7e9ea" font-weight="700">${escapeXml(retweetsStr)}</tspan> <tspan fill="#71767b">Retweets</tspan>
+      <tspan dx="18" fill="#e7e9ea" font-weight="700">${escapeXml(quotesStr)}</tspan> <tspan fill="#71767b">Quotes</tspan>
+      <tspan dx="18" fill="#e7e9ea" font-weight="700">${escapeXml(likesStr)}</tspan> <tspan fill="#71767b">Likes</tspan>
+      <tspan dx="18" fill="#e7e9ea" font-weight="700">${escapeXml(bookmarksStr)}</tspan> <tspan fill="#71767b">Bookmarks</tspan>
+    </text>
+
+    <!-- Divider 2 -->
+    <line x1="${padding}" y1="${hr2Y}" x2="${cardWidth - padding}" y2="${hr2Y}" stroke="#2f3336" stroke-width="1"/>
+
+    <!-- Action Icons (Reply, Retweet, Like, Bookmark, Share) -->
+    <g transform="translate(${padding + 30}, ${iconsY})" fill="#71767b">
+      <path d="M1.751 10c0-4.42 3.584-8 8.005-8h4.366c4.49 0 8.129 3.64 8.129 8.13 0 2.96-1.607 5.68-4.196 7.11l-1.102.61.405 1.18c.421 1.23.111 2.59-.801 3.5-1.01 1.01-2.47 1.22-3.72.53l-4.52-2.49c-.482-.27-.923-.42-1.385-.42-2.825 0-5.081-2.25-5.081-5.08v-4.87z" transform="scale(0.8)"/>
+    </g>
+    <g transform="translate(${padding + 180}, ${iconsY})" fill="#71767b">
+      <path d="M4.5 3.88l4.432 4.14-1.364 1.46L5.5 7.55V16c0 1.1.895 2 2 2H13v2H7.5c-2.209 0-4-1.79-4-4V7.55L1.432 9.48.068 8.02 4.5 3.88zM16.5 20.12l-4.432-4.14 1.364-1.46 2.068 1.93V8c0-1.1-.895-2-2-2H11V4h2.5c2.209 0 4 1.79 4 4v8.45l2.068-1.93 1.364 1.46-4.432 4.14z" transform="scale(0.8)"/>
+    </g>
+    <g transform="translate(${padding + 330}, ${iconsY})" fill="#f91880">
+      <path d="M16.697 5.5c-1.222-.06-2.679.51-3.89 2.16l-.805 1.09-.806-1.09C9.984 6.01 8.526 5.44 7.304 5.5c-2.415.11-4.304 2.12-4.304 4.58 0 1.28.53 2.4 1.401 3.24L12 21l7.6-7.68c.87-.84 1.4-1.96 1.4-3.24 0-2.46-1.89-4.47-4.303-4.58z" transform="scale(0.8)"/>
+    </g>
+    <g transform="translate(${padding + 480}, ${iconsY})" fill="#71767b">
+      <path d="M4 4.5C4 3.12 5.119 2 6.5 2h11C18.881 2 20 3.12 20 4.5v16.88c0 .85-.92 1.38-1.66.95L12 18.25l-6.34 4.08c-.74.43-1.66-.1-1.66-.95V4.5z" transform="scale(0.8)"/>
+    </g>
+    <g transform="translate(${cardWidth - padding - 40}, ${iconsY})" fill="#71767b">
+      <path d="M12 2.59l5.7 5.7-1.41 1.42L13 6.41V16h-2V6.41L7.71 9.71 6.3 8.29 12 2.59zM21 15l-.02 3.51c0 1.38-1.12 2.49-2.5 2.49H5.5C4.11 21.01 3 19.9 3 18.51V15h2v3.5c0 .28.22.5.5.5h12.98c.28 0 .5-.22.5-.5V15h2.02z" transform="scale(0.8)"/>
+    </g>
+  </svg>
+  `.trim();
+
+  let img = sharp(Buffer.from(svg));
+  if (circularAvatarBuffer) {
+    img = img.composite([{ input: circularAvatarBuffer, left: avatarX, top: avatarY }]);
+  }
+  return await img.png().toBuffer();
+}
+
+/**
+ * 17. AESTHETIC DARK QUOTE GENERATOR (.quote)
+ * Membuat poster kata bijak estetik bernuansa gelap sinematik dengan tanda kutip besar, avatar berbingkai neon, dan signature
+ */
+async function makeAestheticQuote({
+  name = 'Seseorang',
+  username = 'user',
+  text = 'Kutipan kata bijak...',
+  avatarBuffer = null,
+  year = '2026'
+}) {
+  const cleanName = String(name || 'Seseorang').trim().slice(0, 28);
+  const cleanUsername = String(username || 'user').trim().replace(/^@/, '').slice(0, 24);
+  const lines = wrapText(text, 34, 7);
+
+  const cardWidth = 960;
+  const cardHeight = 540;
+
+  const avatarSize = 120;
+  const avatarX = 70;
+  const avatarY = 160;
+
+  let circularAvatarBuffer = null;
+  if (avatarBuffer && Buffer.isBuffer(avatarBuffer)) {
+    try {
+      const circleMask = Buffer.from(
+        `<svg width="${avatarSize}" height="${avatarSize}"><circle cx="${avatarSize / 2}" cy="${avatarSize / 2}" r="${avatarSize / 2}" fill="#000"/></svg>`
+      );
+      circularAvatarBuffer = await sharp(avatarBuffer)
+        .resize(avatarSize, avatarSize, { fit: 'cover' })
+        .composite([{ input: circleMask, blend: 'dest-in' }])
+        .png()
+        .toBuffer();
+    } catch (_) {
+      circularAvatarBuffer = null;
+    }
+  }
+
+  const quoteX = 260;
+  const quoteLineHeight = 38;
+  const totalTextHeight = lines.length * quoteLineHeight;
+  const quoteStartY = Math.max(150, Math.round((cardHeight - totalTextHeight) / 2) - 10);
+
+  const textTspans = lines
+    .map((line, idx) => `<tspan x="${quoteX}" dy="${idx === 0 ? 0 : quoteLineHeight}">${escapeXml(line)}</tspan>`)
+    .join('\n');
+
+  const authorY = quoteStartY + totalTextHeight + 42;
+  const fallbackInitial = (cleanName[0] || 'U').toUpperCase();
+
+  const svg = `
+  <svg width="${cardWidth}" height="${cardHeight}" viewBox="0 0 ${cardWidth} ${cardHeight}" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="#090a0f"/>
+        <stop offset="50%" stop-color="#121622"/>
+        <stop offset="100%" stop-color="#1b2030"/>
+      </linearGradient>
+      <linearGradient id="ring" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="#38bdf8"/>
+        <stop offset="100%" stop-color="#818cf8"/>
+      </linearGradient>
+      <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="0%">
+        <stop offset="0%" stop-color="#38bdf8"/>
+        <stop offset="100%" stop-color="#a855f7"/>
+      </linearGradient>
+      <filter id="glow" x="-10%" y="-10%" width="120%" height="120%">
+        <feDropShadow dx="0" dy="8" stdDeviation="16" flood-color="#000000" flood-opacity="0.6"/>
+      </filter>
+    </defs>
+
+    <rect width="${cardWidth}" height="${cardHeight}" fill="url(#bg)"/>
+    <rect x="24" y="24" width="${cardWidth - 48}" height="${cardHeight - 48}" rx="20" ry="20" fill="none" stroke="#2d3748" stroke-width="1.2" opacity="0.6"/>
+
+    <text x="235" y="230" fill="#38bdf8" font-size="220" font-family="Georgia, serif" opacity="0.08" font-weight="700">“</text>
+
+    <circle cx="${avatarX + avatarSize / 2}" cy="${avatarY + avatarSize / 2}" r="${avatarSize / 2 + 5}" fill="none" stroke="url(#ring)" stroke-width="3" filter="url(#glow)"/>
+
+    ${circularAvatarBuffer ? '' : `
+      <circle cx="${avatarX + avatarSize / 2}" cy="${avatarY + avatarSize / 2}" r="${avatarSize / 2}" fill="#1e293b"/>
+      <text x="${avatarX + avatarSize / 2}" y="${avatarY + avatarSize / 2 + 18}" fill="#38bdf8" font-size="52" font-weight="700" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" text-anchor="middle">${escapeXml(fallbackInitial)}</text>
+    `}
+
+    <text x="${avatarX + avatarSize / 2}" y="${avatarY + avatarSize + 34}" fill="#f8fafc" font-size="18" font-weight="700" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" text-anchor="middle">${escapeXml(cleanName)}</text>
+    <text x="${avatarX + avatarSize / 2}" y="${avatarY + avatarSize + 56}" fill="#94a3b8" font-size="13" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" text-anchor="middle">@${escapeXml(cleanUsername)}</text>
+
+    <rect x="${avatarX + avatarSize / 2 - 40}" y="${avatarY + avatarSize + 68}" width="80" height="20" rx="10" ry="10" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+    <text x="${avatarX + avatarSize / 2}" y="${avatarY + avatarSize + 82}" fill="#38bdf8" font-size="10" font-weight="700" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" text-anchor="middle">WORDS OF WISDOM</text>
+
+    <line x1="225" y1="120" x2="225" y2="${cardHeight - 120}" stroke="#334155" stroke-width="1.5" opacity="0.4"/>
+
+    <text x="${quoteX}" y="${quoteStartY}" fill="#f1f5f9" font-size="28" font-style="italic" font-family="Georgia, 'Times New Roman', serif" letter-spacing="0.5">
+      ${textTspans}
+    </text>
+
+    <line x1="${quoteX}" y1="${authorY - 14}" x2="${quoteX + 60}" y2="${authorY - 14}" stroke="url(#accent)" stroke-width="3" stroke-linecap="round"/>
+    <text x="${quoteX + 75}" y="${authorY - 9}" fill="#38bdf8" font-size="18" font-weight="700" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">— ${escapeXml(cleanName)}, <tspan fill="#64748b" font-weight="400">${escapeXml(year)}</tspan></text>
+
+    <text x="${cardWidth - 50}" y="${cardHeight - 44}" fill="#475569" font-size="12" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" text-anchor="end" letter-spacing="1">TUFFBOT QUOTES</text>
+  </svg>
+  `.trim();
+
+  let img = sharp(Buffer.from(svg));
+  if (circularAvatarBuffer) {
+    img = img.composite([{ input: circularAvatarBuffer, left: avatarX, top: avatarY }]);
+  }
+  return await img.png().toBuffer();
+}
+
 module.exports = {
+  makeFakeTweet,
+  makeAestheticQuote,
   makeQcSticker,
   getInstagramMedia,
   makeSmemeSticker,
