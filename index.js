@@ -28,6 +28,10 @@ const {
   generateAiImage
 } = require('./src/tools');
 
+const afkManager = require("./src/afk-manager");
+const menfessManager = require("./src/menfess-manager");
+const economyManager = require('./src/economy-manager');
+const gamesManager = require('./src/games-manager');
 const { makeDiscordSticker, makeSticker, stickerToImage } = require('./src/sticker');
 const { upscaleImage } = require('./src/hd');
 const { makeBratSticker, makeBratVideoSticker } = require('./src/brat');
@@ -119,6 +123,8 @@ function clearAiHistory(userId) {
 
 // Sesi game tebak kata per channel
 const activeTebakKata = new Map();
+const activeSusunKata = new Map();
+const activeMathQuiz = new Map();
 
 // Cooldown command per user
 const userCooldowns = new Map();
@@ -305,6 +311,119 @@ async function parseCustomProfileInput({ message, args, rawArgsText, refMsg }) {
 // Core Command Handler: Dapat dipanggil dari Discord chat maupun console CLI
 async function handleCommand({ message, command, args, rawText }) {
   const prefix = config.prefix || '.';
+
+  // Handling Menfess via DM
+  if (!message.guild) {
+    const isMenfess = message.content.startsWith(prefix + 'menfess') || message.content.startsWith(prefix + 'confess');
+    if (isMenfess) {
+      const rawArgs = message.content.slice(prefix.length).trim().split(/\s+/);
+      const textMsg = rawArgs.slice(1).join(' ').trim();
+      let mediaUrl = null;
+      if (message.attachments && message.attachments.size > 0) {
+        const att = message.attachments.first();
+        if (!att.contentType || att.contentType.startsWith('image/')) {
+          mediaUrl = att.url;
+        }
+      }
+
+      if (!textMsg && !mediaUrl) {
+        return await message.reply({
+          content: `💌 **Format Kirim Menfess via DM:**\nKetik: \`${prefix}menfess <pesan curhat kamu>\` (bisa lampirkan gambar jika mau).\nPesan akan dikirimkan secara anonim ke channel menfess server tanpa membocorkan identitasmu!`
+        });
+      }
+
+      const allConfigs = menfessManager.getAllConfigs();
+      let targetGuild = null;
+      let targetChannelId = null;
+
+      for (const [gid, cfg] of Object.entries(allConfigs)) {
+        if (cfg && cfg.channelId) {
+          const g = client.guilds.cache.get(gid);
+          if (g) {
+            targetGuild = g;
+            targetChannelId = cfg.channelId;
+            break;
+          }
+        }
+      }
+
+      if (!targetGuild || !targetChannelId) {
+        return await message.reply({
+          content: '❌ Belum ada channel menfess yang diatur di server! Minta Admin server mengetik `.setmenfess #channel` terlebih dahulu.'
+        });
+      }
+
+      const destChannel = targetGuild.channels.cache.get(targetChannelId) || await client.channels.fetch(targetChannelId).catch(() => null);
+      if (!destChannel) {
+        return await message.reply({ content: '❌ Channel tujuan menfess tidak ditemukan atau bot tidak memiliki izin mengaksesnya.' });
+      }
+
+      const count = menfessManager.incrementAndGetCount(targetGuild.id);
+      const embed = menfessManager.buildMenfessEmbed({ count, text: textMsg, mediaUrl });
+      await destChannel.send({ embeds: [embed] });
+
+      return await message.reply({
+        content: `✅ Menfess kamu berhasil terkirim secara anonim sebagai **#${String(count).padStart(3, '0')}** ke channel **#${destChannel.name}** di server **${targetGuild.name}**!`
+      });
+    }
+  }
+
+  // Handling AFK jika pesan di server
+  if (message.guild) {
+    // 1. Cek apakah pengirim pesan sedang AFK
+    const senderAfk = afkManager.getAfk(message.author.id);
+    const isAfkSettingCommand = message.content.startsWith(prefix + 'afk');
+
+    if (senderAfk && !isAfkSettingCommand) {
+      const oldAfk = afkManager.removeAfk(message.author.id);
+      const duration = afkManager.formatDuration(Date.now() - oldAfk.timestamp);
+
+      const welcomeEmbed = new EmbedBuilder()
+        .setColor(0x57F287)
+        .setTitle('👋 Status AFK Dicabut')
+        .setDescription(`Selamat datang kembali **${message.author.displayName || message.author.username}**! Status AFK kamu telah dinonaktifkan.\n⏱️ Kamu AFK selama **${duration}**.`)
+        .setTimestamp();
+
+      if (oldAfk.mentions && oldAfk.mentions.length > 0) {
+        const mentionList = oldAfk.mentions.slice(-5).map((m, idx) => {
+          return `**${idx + 1}.** Dari **${m.authorTag}** di <#${m.channelId}>:\n> "${m.content}" ${m.url ? `([Lompat ke Pesan](${m.url}))` : ''}`;
+        }).join('\n');
+
+        welcomeEmbed.addFields({
+          name: `📬 Pesan yang Mencari Kamu (${oldAfk.mentions.length} total)`,
+          value: mentionList.slice(0, 1024)
+        });
+      }
+
+      await message.reply({ embeds: [welcomeEmbed] }).catch(() => {});
+    }
+
+    // 2. Cek apakah ada member AFK yang di-mention oleh pesan ini
+    if (message.mentions && message.mentions.users && message.mentions.users.size > 0) {
+      for (const [mUserId, mUser] of message.mentions.users) {
+        if (mUser.bot || mUserId === message.author.id) continue;
+        const targetAfk = afkManager.getAfk(mUserId);
+        if (targetAfk) {
+          afkManager.recordMention(mUserId, {
+            authorTag: message.author.displayName || message.author.username,
+            authorId: message.author.id,
+            channelName: message.channel.name,
+            channelId: message.channel.id,
+            content: message.content.slice(0, 180),
+            url: message.url,
+            timestamp: Date.now()
+          });
+
+          const durationAgo = afkManager.formatDuration(Date.now() - targetAfk.timestamp);
+          await message.reply({
+            content: `💤 **${mUser.displayName || mUser.username}** sedang **AFK**: *${targetAfk.reason}* (${durationAgo} yang lalu). Pesanmu sudah dicatat!`
+          }).catch(() => {});
+          break;
+        }
+      }
+    }
+  }
+
   const userId = message.author ? message.author.id : 'console-user';
   const authorName = message.author ? (message.author.displayName || message.author.username) : 'Console';
   const avatarUrl = message.author && message.author.displayAvatarURL ? message.author.displayAvatarURL({ extension: 'png' }) : 'https://cdn.discordapp.com/embed/avatars/0.png';
@@ -373,6 +492,15 @@ async function handleCommand({ message, command, args, rawText }) {
             ].join('\n')
           },
           {
+            name: '💬 Komunitas, AFK & Menfess',
+            value: [
+              `\`${prefix}afk [alasan]\` - Pasang status AFK & rangkum pesan saat offline`,
+              `\`${prefix}menfess <pesan>\` - Kirim pesan curhat/confession anonim (+foto)`,
+              `\`${prefix}menfess dm @user <pesan>\` - Kirim pesan rahasia langsung ke DM orang`,
+              `\`${prefix}setmenfess <#channel>\` - Atur channel tujuan menfess server (Admin)`
+            ].join('\n')
+          },
+          {
             name: '🛠️ Utilitas & Rahasia',
             value: [
               `\`${prefix}tr <kode> <teks>\` - Terjemahan bahasa (.tr en halo)`,
@@ -404,15 +532,46 @@ async function handleCommand({ message, command, args, rawText }) {
               `\`${prefix}setdesc <topik>\` - Ganti topik channel`
             ].join('\n')
           },
-          {
-            name: '🎲 Mini Games & Hiburan',
+{
+            name: '💰 Ekonomi, Pekerjaan & Penukaran Koin',
             value: [
-              `\`${prefix}tebakkata\` - Kuis tebak kata berhadiah (60 detik)`,
-              `\`${prefix}dadu\` - Lempar dadu acak 1-6`,
-              `\`${prefix}koin\` - Lempar koin (Gambar / Angka)`,
-              `\`${prefix}apakah <tanya>\` - Jawaban acak bot`,
-              `\`${prefix}rate <hal>\` - Nilai rating sesuatu (0-100%)`,
-              `\`${prefix}siapakah <pertanyaan>\` - Pilih member acak server`
+              `\`${prefix}bal\` - Cek saldo dompet, bank, streak & efek buff`,
+              `\`${prefix}daily\` - Klaim koin harian (Bonus Streak & Mystery Box!)`,
+              `\`${prefix}work\` - Bekerja halal mencari nafkah (cooldown 30 mnt)`,
+              `\`${prefix}crime\` - Aksi kejahatan berisiko tinggi (reward besar!)`,
+              `\`${prefix}beg\` - Mengemis recehan santai (cooldown 5 mnt)`,
+              `\`${prefix}mancing\` - Memancing ikan & harta karun samudra`,
+              `\`${prefix}mining\` - Menambang mineral batu, emas, berlian & zamrud`,
+              `\`${prefix}jual [all]\` - Jual hasil tangkapan & tambang jadi koin`,
+              `\`${prefix}dep\` / \`${prefix}wd\` - Deposit & penarikan koin di bank`,
+              `\`${prefix}pay @user <jumlah>\` - Transfer koin ke teman`,
+              `\`${prefix}rob @user\` - Coba rampok dompet (bisa ditangkal shield/brankas)`,
+              `\`${prefix}rich\` - Top 10 member terkaya di server`,
+              `\`${prefix}shop\` - Toko penukaran koin (16+ item, alat, buff & gelar)`,
+              `\`${prefix}buy <id>\` - Beli item / alat / gelar prestise`,
+              `\`${prefix}inv\` - Cek inventaris & isi tas kamu`,
+              `\`${prefix}use <id>\` - Gunakan item konsumsi / buka Mystery Box`,
+              `\`${prefix}settitle <gelar>\` - Pasang custom gelar profil impian`,
+              `\`${prefix}lotre\` - Beli tiket & pantau akumulasi jackpot server`,
+              `\`${prefix}gift @user [pesan]\` - Kirim paket kado koin ke teman`,
+              `\`${prefix}prank @user\` - Lemparkan bom tepung jahil ke teman`
+            ].join('\n')
+          },
+          {
+            name: '🎲 Mini Games & Kasino Hiburan',
+            value: [
+              `\`${prefix}slot <taruhan/all>\` - Mesin slot kasino 777 (Jackpot s/d 10x!)`,
+              `\`${prefix}rolet <pilihan> <taruhan>\` - Rolet kasino (Merah/Hitam 2x, Angka 36x!)`,
+              `\`${prefix}bj <taruhan/all>\` - Permainan kartu Blackjack 21 vs Dealer`,
+              `\`${prefix}pacuankuda <1-5> <taruhan>\` - Balap kuda pacu seru (Payout 4x!)`,
+              `\`${prefix}mines <1-5 ranjau> <taruhan>\` - Tebak petak ranjau (Multiplier s/d 5.5x!)`,
+              `\`${prefix}suit <batu/gunting/kertas> [taruhan]\` - Duel suit vs bot bertaruh koin`,
+              `\`${prefix}dadu [taruhan]\` - Lempar dadu kasual atau duel taruhan vs bot`,
+              `\`${prefix}cf <pilihan> [taruhan]\` - Coinflip koin (gambar/angka / benar/salah)`,
+              `\`${prefix}tebakangka <1-10> <taruhan>\` - Tebak angka rahasia (Payout 5x!)`,
+              `\`${prefix}math\` / \`${prefix}hitung\` - Kuis hitung cepat rebutan koin di chat`,
+              `\`${prefix}susunkata\` / \`${prefix}tebakkata\` - Kuis tebak kata berhadiah koin`,
+              `\`${prefix}apakah\` / \`${prefix}rate\` / \`${prefix}siapakah\` - Game santai & lucu`
             ].join('\n')
           },
           {
@@ -1277,18 +1436,948 @@ async function handleCommand({ message, command, args, rawText }) {
       break;
     }
 
-    // --- GAMES & FUN ---
-    case 'dadu': {
-      const roll = Math.floor(Math.random() * 6) + 1;
-      const text = `🎲 **${authorName}** melempar dadu dan mendapatkan angka: **${roll}**!`;
+    // --- EKONOMI ---
+case 'bal':
+    case 'balance':
+    case 'dompet':
+    case 'saldo': {
+      const target = message.mentions.users.first() || message.author;
+      const account = economyManager.getUser(target.id);
+      const total = account.wallet + account.bank;
+      const embed = new EmbedBuilder()
+        .setColor(0xFEE75C)
+        .setTitle(`💰 Profil Ekonomi: ${target.displayName || target.username}`)
+        .setThumbnail(target.displayAvatarURL())
+        .addFields(
+          { name: '👑 Gelar', value: account.title || '*Belum memiliki gelar (cek `' + prefix + 'shop`)*', inline: false },
+          { name: '💵 Dompet', value: economyManager.formatCoin(account.wallet), inline: true },
+          { name: '🏦 Bank', value: economyManager.formatCoin(account.bank), inline: true },
+          { name: '💎 Total', value: economyManager.formatCoin(total), inline: true },
+          { name: '🔥 Daily Streak', value: `${account.dailyStreak || 0} hari berturut-turut`, inline: true }
+        );
+
+      const activeBuffs = [];
+      if (account.buffs?.shieldActive) activeBuffs.push('🛡️ Perisai Anti-Rampok Aktif (1x Tahan Rampok)');
+      if (account.buffs?.luckyCharges > 0) activeBuffs.push(`🍀 Jimat Hoki Aktif (${account.buffs.luckyCharges}x kemenangan taruhan)`);
+      if (account.buffs?.workDoubler > 0) activeBuffs.push(`🧪 Elixir Kerja Aktif (${account.buffs.workDoubler}x gaji ganda .work)`);
+      if (account.buffs?.hasSafe) activeBuffs.push('🔐 Brankas Rahasia Aktif (60% koin dompet terlindungi)');
+
+      if (activeBuffs.length > 0) {
+        embed.addFields({ name: '✨ Efek & Perlindungan Aktif', value: activeBuffs.join('\n'), inline: false });
+      }
+
+      embed.setFooter({ text: `Ketik ${prefix}shop untuk belanja item | ${prefix}inv untuk cek tas | ${prefix}jual untuk cairkan hasil panen` }).setTimestamp();
+
+      await message.reply({ embeds: [embed] });
+      replyTextOutput = `Total saldo ${target.username}: ${economyManager.formatCoin(total)}`;
+      break;
+    }
+
+case 'daily':
+    case 'harian': {
+      const result = economyManager.claimDaily(userId);
+      let text = '';
+      if (result.success) {
+        text = `🎁 Kamu mendapat **+${economyManager.formatCoin(result.totalReward)}**! (Hadiah Dasar: ${economyManager.formatCoin(result.baseReward)}${result.streakBonus > 0 ? ` + Bonus Streak: +${economyManager.formatCoin(result.streakBonus)}` : ''})\n🔥 Daily Streak: **${result.streak} hari berturut-turut**!`;
+        if (result.gotFreeBox) {
+          text += `\n🎉 **MILESTONE STREAK 7 HARI!** Kamu dihadiahi bonus **1x 🎁 Mystery Box** gratis di tasmu!`;
+        }
+        text += `\n💵 Saldo dompet: **${economyManager.formatCoin(result.newWallet)}**.`;
+      } else {
+        text = `⏳ Daily sudah diklaim. Coba lagi dalam **${economyManager.formatTime(result.remainingMs)}**.`;
+      }
       await message.reply({ content: text });
       replyTextOutput = text;
       break;
     }
 
-    case 'koin': {
-      const coin = Math.random() < 0.5 ? 'Gambar' : 'Angka';
-      const text = `🪙 Koin dilempar... hasilnya adalah: **${coin}**!`;
+    case 'work':
+    case 'kerja': {
+      const result = economyManager.workJob(userId);
+      let text = '';
+      if (result.success) {
+        const bonusTag = result.doubled ? ` 🧪 **[ELIXIR 2X GAJI!]** (Sisa Elixir: ${result.remainingCharges}x)` : '';
+        text = `💼 **${result.job}**${bonusTag}\n${result.desc}.\nGaji didapat: **+${economyManager.formatCoin(result.salary)}**.\nSaldo dompet: **${economyManager.formatCoin(result.newWallet)}**.`;
+      } else {
+        text = `☕ Istirahat dulu. Bisa kerja lagi dalam **${economyManager.formatTime(result.remainingMs)}**.`;
+      }
+      await message.reply({ content: text });
+      replyTextOutput = text;
+      break;
+    }
+
+    case 'dep':
+    case 'deposit':
+    case 'wd':
+    case 'withdraw':
+    case 'tarik': {
+      const isDeposit = ['dep', 'deposit'].includes(command);
+      const result = isDeposit
+        ? economyManager.deposit(userId, (args[0] || '').toLowerCase())
+        : economyManager.withdraw(userId, (args[0] || '').toLowerCase());
+      const text = result.success
+        ? `${isDeposit ? '🏦 Deposit' : '🏧 Penarikan'} berhasil: **${economyManager.formatCoin(isDeposit ? result.deposited : result.withdrawn)}**.\nDompet: **${economyManager.formatCoin(result.wallet)}** | Bank: **${economyManager.formatCoin(result.bank)}**.`
+        : `❌ ${result.error || `Gunakan ${prefix}${isDeposit ? 'dep' : 'wd'} <jumlah/all>.`}`;
+      await message.reply({ content: text });
+      replyTextOutput = text;
+      break;
+    }
+
+    case 'pay':
+    case 'transfer':
+    case 'tf': {
+      const target = message.mentions.users.first();
+      const amount = args.find(a => /^\d+$/.test(a));
+      if (!target || !amount || target.bot) {
+        const text = `Format: \`${prefix}pay @user <jumlah>\``;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        break;
+      }
+      const result = economyManager.transfer(userId, target.id, amount);
+      const text = result.success
+        ? `💸 Terkirim **${economyManager.formatCoin(result.amount)}** ke **${target.displayName || target.username}**. Saldo dompetmu: **${economyManager.formatCoin(result.fromWallet)}**.`
+        : `❌ ${result.error}`;
+      await message.reply({ content: text });
+      replyTextOutput = text;
+      break;
+    }
+
+    case 'rob':
+    case 'rampok': {
+      const target = message.mentions.users.first();
+      if (!target || target.bot) {
+        const text = `Format: \`${prefix}rob @user\``;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        break;
+      }
+      const result = economyManager.robUser(userId, target.id);
+      let text;
+      if (result.onCooldown) text = `🚨 Tunggu **${economyManager.formatTime(result.remainingMs)}** sebelum mencoba lagi.`;
+      else if (result.caught) text = `🚔 Gagal dan tertangkap! Denda **${economyManager.formatCoin(result.fine)}** dibayarkan ke korban.`;
+      else if (result.success) text = `🦹 Berhasil mengambil **${economyManager.formatCoin(result.stolen)}** dari dompet target!`;
+      else text = `❌ ${result.error}`;
+      await message.reply({ content: text });
+      replyTextOutput = text;
+      break;
+    }
+
+    // --- FITUR EKONOMI BARU: CRIME, BEG, MANCING, MINING, JUAL, SETTITLE, LOTRE, GIFT, PRANK ---
+    case 'crime':
+    case 'begal':
+    case 'kriminal': {
+      const result = economyManager.crimeJob(userId);
+      let text = '';
+      if (result.onCooldown) {
+        text = `🚨 Polisi sedang patroli ketat! Tunggu **${economyManager.formatTime(result.remainingMs)}** sebelum beraksi lagi.`;
+      } else if (result.success) {
+        text = `🦹 **AKSI KEJAHATAN BERHASIL!**\nMisi: *${result.action}*\nHasil jarahan koin: **+${economyManager.formatCoin(result.loot)}**!\n💵 Saldo dompetmu: **${economyManager.formatCoin(result.newWallet)}**.`;
+      } else {
+        text = `🚔 **TERCYDUK POLISI!**\n*${result.failDesc}*\nKamu kena denda tilang: **-${economyManager.formatCoin(result.fine)}**!\n💵 Sisa saldo dompet: **${economyManager.formatCoin(result.newWallet)}**.`;
+      }
+      await message.reply({ content: text });
+      replyTextOutput = text;
+      break;
+    }
+
+    case 'beg':
+    case 'minta':
+    case 'ngemis': {
+      const result = economyManager.begCoin(userId);
+      let text = '';
+      if (result.onCooldown) {
+        text = `⏳ Jangan terlalu sering minta-minta! Tunggu **${economyManager.formatTime(result.remainingMs)}**.`;
+      } else if (result.success) {
+        text = `🥺 *${result.text}*\nKamu diberi sedekah: **+${economyManager.formatCoin(result.coin)}**!\n💵 Saldo dompet: **${economyManager.formatCoin(result.newWallet)}**.`;
+      } else {
+        text = `🥺 *${result.text}*\nKamu tidak mendapatkan apa-apa kali ini.`;
+      }
+      await message.reply({ content: text });
+      replyTextOutput = text;
+      break;
+    }
+
+    case 'mancing':
+    case 'fish':
+    case 'mancingikan': {
+      const result = economyManager.fishAction(userId);
+      if (result.onCooldown) {
+        const text = `🎣 Ikan sedang tidak nafsu makan. Bisa mancing lagi dalam **${economyManager.formatTime(result.remainingMs)}**.`;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        break;
+      }
+
+      const c = result.catch;
+      const baitNotice = result.hasBait ? '\n🪱 *Kamu menggunakan 1x Umpan Cacing Sakti (Peluang tangkapan langka berlipat!)*' : '';
+      const embed = new EmbedBuilder()
+        .setColor(0x00A8FC)
+        .setTitle(`🎣 Mancing Mania: ${authorName}`)
+        .setDescription(`Kailmu ditarik kuat ke dasar dan kamu mendapatkan:\n\n${c.emoji} **${c.name}**\n💰 Nilai Jual: **${economyManager.formatCoin(c.value)}**\n📦 Total di tas: **${result.newCount}x**${baitNotice}`)
+        .setFooter({ text: `Ketik ${prefix}jual untuk menjual hasil tangkapan menjadi koin | ${prefix}inv untuk cek tas` })
+        .setTimestamp();
+
+      await message.reply({ embeds: [embed] });
+      replyTextOutput = `Mancing dapat ${c.name}`;
+      break;
+    }
+
+    case 'mining':
+    case 'tambang':
+    case 'nambang': {
+      const result = economyManager.mineAction(userId);
+      if (result.onCooldown) {
+        const text = `⛏️ Lorong tambang masih berbahaya. Bisa menambang lagi dalam **${economyManager.formatTime(result.remainingMs)}**.`;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        break;
+      }
+
+      const ore = result.ore;
+      const pickNotice = result.hasPickaxe ? '\n⛏️ *Menggunakan Beliung Tambang Besi (Bonus mineral berharga!)*' : '';
+      const embed = new EmbedBuilder()
+        .setColor(0xE67E22)
+        .setTitle(`⛏️ Ekskavasi Tambang: ${authorName}`)
+        .setDescription(`Kamu mengayunkan beliung ke bebatuan gua dan menambang:\n\n${ore.emoji} **${result.amount}x ${ore.name}**\n💰 Nilai per bijih: **${economyManager.formatCoin(ore.value)}**\n📦 Total di tas: **${result.newCount}x**${pickNotice}`)
+        .setFooter({ text: `Ketik ${prefix}jual untuk mencairkan hasil tambang jadi koin | ${prefix}inv untuk cek tas` })
+        .setTimestamp();
+
+      await message.reply({ embeds: [embed] });
+      replyTextOutput = `Mining dapat ${ore.name}`;
+      break;
+    }
+
+    case 'sell':
+    case 'jual': {
+      const query = (args[0] || '').toLowerCase();
+      const result = economyManager.sellItems(userId, query);
+      if (!result.success) {
+        await message.reply({ content: `❌ ${result.error}` });
+        replyTextOutput = result.error;
+        break;
+      }
+
+      const lines = result.soldRecords.map(r => `• ${r.emoji} **${r.count}x ${r.name}** ➔ **+${economyManager.formatCoin(r.gain)}**`);
+      const embed = new EmbedBuilder()
+        .setColor(0x2ECC71)
+        .setTitle(`🏪 Penjualan Hasil Panen: ${authorName}`)
+        .setDescription(`Berhasil menjual komoditas ke pasar koin:\n\n${lines.join('\n')}\n\n💰 **Total Koin Diterima:** +**${economyManager.formatCoin(result.totalGain)}**\n💵 **Saldo Dompet Sekarang:** **${economyManager.formatCoin(result.newWallet)}**`)
+        .setFooter({ text: `Dapatkan lebih banyak koin lewat ${prefix}mancing dan ${prefix}mining!` })
+        .setTimestamp();
+
+      await message.reply({ embeds: [embed] });
+      replyTextOutput = `Jual barang dapat +${result.totalGain} koin`;
+      break;
+    }
+
+    case 'settitle':
+    case 'gelar': {
+      const titleInput = args.join(' ');
+      if (!titleInput) {
+        const text = `Format: \`${prefix}settitle <nama gelar kamu>\`\n*(Membutuhkan item Tiket Gelar Kustom dari \`${prefix}shop\`)*`;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        break;
+      }
+
+      const result = economyManager.setCustomTitle(userId, titleInput);
+      if (!result.success) {
+        await message.reply({ content: `❌ ${result.error}` });
+        replyTextOutput = result.error;
+        break;
+      }
+
+      const text = `🎉 **Gelar Baru Terpasang!** Profilmu kini menyandang gelar: **${result.title}**!\nCek kartu profil barumu dengan \`${prefix}bal\`.`;
+      await message.reply({ content: text });
+      replyTextOutput = text;
+      break;
+    }
+
+    case 'lotre':
+    case 'lottery': {
+      const info = economyManager.getLotteryInfo();
+      const myTickets = info.tickets[userId] || 0;
+      const embed = new EmbedBuilder()
+        .setColor(0x9B59B6)
+        .setTitle('🎟️ Jackpot Lotre Koin Mingguan Server')
+        .setDescription(`Kumpulkan tiket lotre dan menangkan jackpot koin raksasa!\n\n💰 **Total Jackpot Pool Saat Ini:** **${economyManager.formatCoin(info.pool)}**\n🎟️ **Harga Tiket:** 500 🪙 (80% masuk ke jackpot pool)\n👥 **Total Tiket Terjual:** ${info.totalTickets} tiket\n🎫 **Tiket Milikmu:** **${myTickets} tiket**\n\nCara beli tiket: Ketik \`${prefix}buy tiket_lotre\``)
+        .setFooter({ text: 'Semakin banyak tiket yang kamu miliki, semakin besar peluang menang jackpot!' })
+        .setTimestamp();
+
+      await message.reply({ embeds: [embed] });
+      replyTextOutput = 'Info lotre ditampilkan';
+      break;
+    }
+
+    case 'gift':
+    case 'kado': {
+      const target = message.mentions.users.first();
+      const rawAmt = args.find(a => /^\d+$/.test(a));
+      if (!target || !rawAmt || target.bot || target.id === userId) {
+        const text = `Format: \`${prefix}gift @user <jumlah_koin> [pesan ucapan]\``;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        break;
+      }
+
+      const note = args.filter(a => !a.startsWith('<@') && a !== rawAmt).join(' ') || 'Semoga harimu menyenangkan!';
+      const result = economyManager.transfer(userId, target.id, rawAmt);
+      if (!result.success) {
+        await message.reply({ content: `❌ ${result.error}` });
+        replyTextOutput = result.error;
+        break;
+      }
+
+      const embed = new EmbedBuilder()
+        .setColor(0xE91E63)
+        .setTitle('🎀 Paket Kado Kejutan Terkirim!')
+        .setDescription(`Dari: **${authorName}**\nUntuk: <@${target.id}>\n\n🎁 **Isi Kado:** **${economyManager.formatCoin(result.amount)}**\n💌 **Ucapan:** *"${note}"*\n\nSisa saldo dompetmu: **${economyManager.formatCoin(result.fromWallet)}**`)
+        .setTimestamp();
+
+      await message.reply({ embeds: [embed] });
+      replyTextOutput = `Gift terkirim ke ${target.username}`;
+      break;
+    }
+
+    case 'prank':
+    case 'bom': {
+      const target = message.mentions.users.first();
+      if (!target || target.id === userId) {
+        const text = `Format: \`${prefix}prank @user\` *(Memerlukan item Bom Tepung Jahil dari \`${prefix}shop\`)*`;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        break;
+      }
+
+      const userAcc = economyManager.getUser(userId);
+      if (!userAcc.inventory || !userAcc.inventory.bom_jahil || userAcc.inventory.bom_jahil <= 0) {
+        const text = `❌ Kamu tidak memiliki **💣 Bom Tepung Jahil** di tas! Beli di \`${prefix}shop\` seharga 1.000 🪙.`;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        break;
+      }
+
+      economyManager.useItem(userId, 'bom_jahil');
+
+      const text = `💣💥 **DUAAARRRR!!**\n**${authorName}** melempar bom tepung jahil ke muka <@${target.id}>!\nSeluruh tubuh <@${target.id}> langsung putih belepotan tepung dan batuk-batuk! 🤣💨`;
+      await message.reply({ content: text });
+      replyTextOutput = text;
+      break;
+    }
+
+
+    case 'rich':
+    case 'lb':
+    case 'leaderboard':
+    case 'topkoin': {
+      const entries = economyManager.getLeaderboard(10);
+      const lines = entries.map((entry, i) => `${['🥇','🥈','🥉'][i] || `**${i + 1}.**`} <@${entry.userId}> — **${economyManager.formatCoin(entry.total)}**`);
+      const text = lines.length ? `🏆 **Top Member Terkaya**\n${lines.join('\n')}` : 'Belum ada data ekonomi.';
+      await message.reply({ content: text });
+      replyTextOutput = text;
+      break;
+    }
+
+    case 'shop':
+    case 'toko': {
+      const catalog = economyManager.getShopCatalog();
+      const embed = new EmbedBuilder()
+        .setColor(0x57F287)
+        .setTitle('🏪 Toko Item In-Game (Penukaran Koin)')
+        .setDescription(`Tukarkan koin hasil kerja & game kamu dengan item, buff, dan gelar eksklusif!\n\nCara beli: \`${prefix}buy <id_item>\`\nContoh: \`${prefix}buy shield\` atau \`${prefix}buy kopi\``)
+        .setTimestamp();
+
+      catalog.forEach(item => {
+        embed.addFields({
+          name: `${item.emoji} ${item.name} — \`${item.id}\``,
+          value: `💰 **Harga:** ${economyManager.formatCoin(item.price)}\n📝 ${item.desc}`,
+          inline: false
+        });
+      });
+
+      embed.setFooter({ text: `Ketik ${prefix}inv untuk cek tas kamu | ${prefix}bal untuk cek saldo dompet` });
+
+      await message.reply({ embeds: [embed] });
+      replyTextOutput = 'Katalog toko berhasil ditampilkan.';
+      break;
+    }
+
+    case 'buy':
+    case 'beli': {
+      const itemId = (args[0] || '').toLowerCase();
+      if (!itemId) {
+        const text = `⚠️ Sebutkan ID item yang ingin kamu beli! Contoh: \`${prefix}buy shield\`\nKetik \`${prefix}shop\` untuk melihat katalog lengkap item.`;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        break;
+      }
+      const result = economyManager.buyItem(userId, itemId);
+      if (!result.success) {
+        await message.reply({ content: `❌ ${result.error}` });
+        replyTextOutput = result.error;
+        break;
+      }
+
+      const item = result.item;
+      let text = `🎉 **Pembelian Berhasil!** Kamu membeli **${item.emoji} ${item.name}** seharga **${economyManager.formatCoin(item.price)}**.\nSisa saldo dompetmu: **${economyManager.formatCoin(result.newWallet)}**.`;
+      if (result.titleEquipped) {
+        text += `\n👑 Gelar **${result.titleEquipped}** langsung terpasang di profilmu!`;
+      } else if (item.id === 'shield') {
+        text += `\n🛡️ Perisai Anti-Rampok otomatis aktif melindungi dompetmu!`;
+      } else if (item.id === 'jimat') {
+        text += `\n🍀 Jimat Hoki otomatis aktif untuk 3x kemenangan taruhan berikutnya!`;
+      } else {
+        text += `\n📦 Item tersimpan di tasmu. Ketik \`${prefix}use ${item.id}\` untuk menggunakannya!`;
+      }
+
+      await message.reply({ content: text });
+      replyTextOutput = text;
+      break;
+    }
+
+    case 'inv':
+    case 'inventory':
+    case 'tas': {
+      const target = message.mentions.users.first() || message.author;
+      const account = economyManager.getUser(target.id);
+      const inv = account.inventory || {};
+      const catalog = economyManager.getShopCatalog();
+
+      const itemsList = [];
+      for (const [id, count] of Object.entries(inv)) {
+        if (count > 0) {
+          const item = catalog.find(i => i.id === id);
+          itemsList.push(`${item ? item.emoji : '📦'} **${item ? item.name : id}** (\`${id}\`): **${count}x**`);
+        }
+      }
+
+      const embed = new EmbedBuilder()
+        .setColor(0x5865F2)
+        .setTitle(`🎒 Tas & Inventaris: ${target.displayName || target.username}`)
+        .setThumbnail(target.displayAvatarURL())
+        .addFields(
+          { name: '👑 Gelar Aktif', value: account.title || '*Tidak ada*', inline: true },
+          { name: '🛡️ Perisai', value: account.buffs?.shieldActive ? 'Aktif' : 'Tidak aktif', inline: true },
+          { name: '🍀 Jimat Hoki', value: account.buffs?.luckyCharges > 0 ? `${account.buffs.luckyCharges}x kemenangan` : 'Tidak aktif', inline: true },
+          { name: '📦 Daftar Barang', value: itemsList.length > 0 ? itemsList.join('\n') : '*Tas masih kosong! Beli item di `' + prefix + 'shop`*', inline: false }
+        )
+        .setFooter({ text: `Gunakan item dengan ${prefix}use <id_item>` })
+        .setTimestamp();
+
+      await message.reply({ embeds: [embed] });
+      replyTextOutput = 'Inventaris berhasil ditampilkan.';
+      break;
+    }
+
+    case 'use':
+    case 'pakai': {
+      const itemId = (args[0] || '').toLowerCase();
+      if (!itemId) {
+        const text = `⚠️ Sebutkan ID item yang ingin kamu pakai! Contoh: \`${prefix}use kopi\` atau \`${prefix}use box\`\nKetik \`${prefix}inv\` untuk cek tas kamu.`;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        break;
+      }
+      const result = economyManager.useItem(userId, itemId);
+      if (!result.success) {
+        await message.reply({ content: `❌ ${result.error}` });
+        replyTextOutput = result.error;
+        break;
+      }
+      await message.reply({ content: result.message });
+      replyTextOutput = result.message;
+      break;
+    }
+
+    // --- MINI GAMES ---
+    case 'slot':
+    case 'slots':
+    case 'jackpot': {
+      const account = economyManager.getUser(userId);
+      const betArg = (args[0] || '').toLowerCase();
+      const bet = ['all', 'semua'].includes(betArg) ? account.wallet : Number.parseInt(betArg, 10);
+      if (!Number.isSafeInteger(bet) || bet <= 0 || bet > account.wallet) {
+        const text = `Taruhan harus angka positif dan tidak melebihi saldo dompet (${economyManager.formatCoin(account.wallet)}). Format: \`${prefix}slot <jumlah/all>\``;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        break;
+      }
+      economyManager.removeWallet(userId, bet);
+      const game = gamesManager.playSlot(bet);
+      let luckyBonus = 0;
+      let luckyMsg = '';
+      if (game.won) {
+        const luckyStatus = economyManager.checkAndConsumeLucky(userId);
+        if (luckyStatus.hasLucky) {
+          luckyBonus = Math.floor(game.payout * 0.25);
+          luckyMsg = `\n🍀 **Bonus Jimat Hoki (+25%):** +${economyManager.formatCoin(luckyBonus)} (Sisa: ${luckyStatus.remaining}x)`;
+        }
+      }
+      if (game.payout + luckyBonus > 0) economyManager.addWallet(userId, game.payout + luckyBonus);
+      const after = economyManager.getUser(userId);
+      const text = `🎰 **${game.reels.join(' | ')}**\n${game.title}\nTaruhan: ${economyManager.formatCoin(bet)} | Hasil bersih: **${game.netProfit >= 0 ? '+' : '-'}${economyManager.formatCoin(Math.abs(game.netProfit))}**\nDompet: ${economyManager.formatCoin(after.wallet)}`;
+      await message.reply({ content: text });
+      replyTextOutput = text;
+      break;
+    }
+
+    case 'dadu':
+    case 'dice': {
+      const betArg = (args[0] || '').toLowerCase();
+      if (!betArg) {
+        const roll = Math.floor(Math.random() * 6) + 1;
+        const text = `🎲 ${authorName} melempar dadu: **${roll}**.`;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        break;
+      }
+      const account = economyManager.getUser(userId);
+      const bet = betArg === 'all' ? account.wallet : Number.parseInt(betArg, 10);
+      if (!Number.isSafeInteger(bet) || bet <= 0 || bet > account.wallet) {
+        const text = `Taruhan tidak valid. Saldo dompet: ${economyManager.formatCoin(account.wallet)}.`;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        break;
+      }
+      economyManager.removeWallet(userId, bet);
+      const game = gamesManager.playDice(bet);
+      let luckyBonus = 0;
+      let luckyMsg = '';
+      if (game.result === 'win') {
+        const luckyStatus = economyManager.checkAndConsumeLucky(userId);
+        if (luckyStatus.hasLucky) {
+          luckyBonus = Math.floor(bet * 0.25);
+          luckyMsg = `\n🍀 **Bonus Jimat Hoki (+25%):** +${economyManager.formatCoin(luckyBonus)} (Sisa: ${luckyStatus.remaining}x)`;
+        }
+      }
+      if (game.payout + luckyBonus > 0) economyManager.addWallet(userId, game.payout + luckyBonus);
+      const after = economyManager.getUser(userId);
+      const text = `🎲 Kamu **${game.playerRoll}** vs bot **${game.botRoll}**${luckyMsg}.\n${game.desc}\nSaldo dompet: **${economyManager.formatCoin(after.wallet)}**.`;
+      await message.reply({ content: text });
+      replyTextOutput = text;
+      break;
+    }
+
+    case 'koin':
+    case 'coinflip':
+    case 'cf': {
+      const rawArg1 = (args[0] || '').toLowerCase();
+      const rawArg2 = (args[1] || '').toLowerCase();
+
+      let sideArg = '';
+      let betArg = '';
+
+      const validSideKeywords = [
+        'gambar', 'g', 'heads', 'head', 'h',
+        'angka', 'a', 'tails', 'tail', 't',
+        'benar', 'bener', 'b', 'true',
+        'salah', 's', 'false'
+      ];
+
+      if (validSideKeywords.includes(rawArg1)) {
+        sideArg = rawArg1;
+        betArg = rawArg2;
+      } else if (validSideKeywords.includes(rawArg2)) {
+        sideArg = rawArg2;
+        betArg = rawArg1;
+      } else if (rawArg1) {
+        sideArg = rawArg1;
+        betArg = rawArg2;
+      }
+
+      // Jika tanpa pilihan sama sekali -> Lempar koin kasual
+      if (!sideArg) {
+        const randomRoll = Math.random() < 0.5 ? 'GAMBAR' : 'ANGKA';
+        const text = `🪙 Koin dilempar ke udara dan mendarat pada: **${randomRoll}**!\n\nUntuk bermain tebakan:\n• Kasual (Gratis): \`${prefix}cf <gambar/angka/benar/salah>\`\n• Taruhan koin: \`${prefix}cf <gambar/angka/benar/salah> <jumlah/all>\``;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        break;
+      }
+
+      // Jika ada pilihan tapi tanpa taruhan -> Coinflip kasual (bisa BENAR atau SALAH)
+      if (!betArg) {
+        const game = gamesManager.playCoinflip(sideArg, 0);
+        const resultBanner = game.won
+          ? '🎉 **TEBAKAN KAMU BENAR!** Koin mendarat tepat sesuai pilihanmu!'
+          : '💀 **TEBAKAN KAMU SALAH!** Koin mendarat di sisi sebaliknya.';
+
+        const text = `🪙 **Coinflip Kasual**\nPilihanmu: **${game.choice.toUpperCase()}**\nHasil Lemparan: **${game.roll.toUpperCase()}**\n\n${resultBanner}\n*(Main bertaruh: \`${prefix}cf ${game.choice} 100\`)*`;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        break;
+      }
+
+      // Jika bermain taruhan koin
+      const account = economyManager.getUser(userId);
+      const bet = ['all', 'semua'].includes(betArg) ? account.wallet : Number.parseInt(betArg, 10);
+      if (!Number.isSafeInteger(bet) || bet <= 0 || bet > account.wallet) {
+        const text = `Taruhan tidak valid! Pastikan berupa angka positif dan tidak melebihi saldo dompetmu (${economyManager.formatCoin(account.wallet)}).\nFormat: \`${prefix}cf <pilihan> <jumlah/all>\``;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        break;
+      }
+
+      economyManager.removeWallet(userId, bet);
+      const game = gamesManager.playCoinflip(sideArg, bet);
+
+      // Cek efek Jimat Hoki jika menang
+      let extraLuckyBonus = 0;
+      let luckyMsg = '';
+      if (game.won) {
+        const luckyStatus = economyManager.checkAndConsumeLucky(userId);
+        if (luckyStatus.hasLucky) {
+          extraLuckyBonus = Math.floor(bet * 0.25);
+          luckyMsg = `\n🍀 **Bonus Jimat Hoki (+25%):** +${economyManager.formatCoin(extraLuckyBonus)} (Sisa jimat: ${luckyStatus.remaining}x)`;
+        }
+      }
+
+      const totalPayout = game.won ? (game.payout + extraLuckyBonus) : 0;
+      if (totalPayout > 0) {
+        economyManager.addWallet(userId, totalPayout);
+      }
+
+      const after = economyManager.getUser(userId);
+      const profit = game.won ? (bet + extraLuckyBonus) : bet;
+
+      const verdict = game.won
+        ? `🎉 **TEBAKAN BENAR (MENANG)!** Kamu mendapatkan **+${economyManager.formatCoin(profit)}**!${luckyMsg}`
+        : `💀 **TEBAKAN SALAH (KALAH)!** Kamu kehilangan **-${economyManager.formatCoin(bet)}**!`;
+
+      const text = `🪙 **Coinflip Bertaruh**\nPilihanmu: **${game.choice.toUpperCase()}** | Hasil Lemparan: **${game.roll.toUpperCase()}**\n\n${verdict}\n💵 Dompet Sekarang: **${economyManager.formatCoin(after.wallet)}**`;
+      await message.reply({ content: text });
+      replyTextOutput = text;
+      break;
+    }
+
+    case 'tebakangka':
+    case 'guessnum': {
+      const guess = Number.parseInt(args[0], 10);
+      const betArg = (args[1] || '').toLowerCase();
+      const account = economyManager.getUser(userId);
+      const bet = betArg === 'all' ? account.wallet : Number.parseInt(betArg, 10);
+      if (!Number.isInteger(guess) || guess < 1 || guess > 10 || !Number.isSafeInteger(bet) || bet <= 0 || bet > account.wallet) {
+        const text = `Format: \`${prefix}tebakangka <1-10> <jumlah/all>\`. Saldo dompet: ${economyManager.formatCoin(account.wallet)}.`;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        break;
+      }
+      economyManager.removeWallet(userId, bet);
+      const secret = Math.floor(Math.random() * 10) + 1;
+      const won = guess === secret;
+      if (won) economyManager.addWallet(userId, bet * 5);
+      const after = economyManager.getUser(userId);
+      const text = `🔢 Tebakanmu **${guess}**, angka rahasia **${secret}**. ${won ? `Tepat! Payout 5x, untung bersih +${economyManager.formatCoin(bet * 4)}.` : `Belum tepat, taruhan ${economyManager.formatCoin(bet)} hilang.`}\nDompet: ${economyManager.formatCoin(after.wallet)}.`;
+      await message.reply({ content: text });
+      replyTextOutput = text;
+      break;
+    }
+
+    // --- MINI GAMES BARU: ROULETTE, BLACKJACK, SUIT, HORSE RACE, MINES, MATH QUIZ ---
+    case 'roulette':
+    case 'rolet': {
+      const choiceArg = (args[0] || '').toLowerCase();
+      const betArg = (args[1] || '').toLowerCase();
+
+      if (!choiceArg) {
+        const text = `🎡 **CARA MAIN ROLET KASINO**\nFormat: \`${prefix}rolet <pilihan> <taruhan/all>\`\n\nPilihan yang tersedia:\n• \`merah\` / \`hitam\` (Payout 2x)\n• \`ganjil\` / \`genap\` (Payout 2x)\n• \`hijau\` (Angka 0, Payout 14x!)\n• Angka tunggal \`0\` s/d \`36\` (Payout 36x Mega Jackpot!)\n\nContoh: \`${prefix}rolet merah 500\` atau \`${prefix}rolet 7 200\``;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        break;
+      }
+
+      const account = economyManager.getUser(userId);
+      const bet = ['all', 'semua'].includes(betArg) ? account.wallet : Number.parseInt(betArg, 10);
+      if (!Number.isSafeInteger(bet) || bet <= 0 || bet > account.wallet) {
+        const text = `Taruhan tidak valid! Saldo dompetmu: ${economyManager.formatCoin(account.wallet)}. Format: \`${prefix}rolet <pilihan> <taruhan>\``;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        break;
+      }
+
+      economyManager.removeWallet(userId, bet);
+      const game = gamesManager.playRoulette(choiceArg, bet);
+
+      let luckyBonus = 0;
+      let luckyMsg = '';
+      if (game.won) {
+        const luckyStatus = economyManager.checkAndConsumeLucky(userId);
+        if (luckyStatus.hasLucky) {
+          luckyBonus = Math.floor(game.payout * 0.25);
+          luckyMsg = `\n🍀 **Bonus Jimat Hoki (+25%):** +${economyManager.formatCoin(luckyBonus)} (Sisa: ${luckyStatus.remaining}x)`;
+        }
+      }
+
+      const totalPayout = game.won ? (game.payout + luckyBonus) : 0;
+      if (totalPayout > 0) economyManager.addWallet(userId, totalPayout);
+
+      const after = economyManager.getUser(userId);
+      const profitText = game.won ? `+${economyManager.formatCoin(game.payout - bet + luckyBonus)}` : `-${economyManager.formatCoin(bet)}`;
+
+      const embed = new EmbedBuilder()
+        .setColor(game.won ? 0x57F287 : 0xED4245)
+        .setTitle('🎡 Meja Rolet Kasino Berputar...')
+        .setDescription(`Bola mendarat pada: **${game.rollEmoji} Nomor ${game.rollNumber} (${game.rollColor.toUpperCase()})**!\n\nTaruhanmu: **${game.choiceDesc}** (${economyManager.formatCoin(bet)})\nHasil: ${game.won ? `🎉 **MENANG (${game.multiplier}x)!** Hasil bersih: **${profitText}**${luckyMsg}` : `💀 **KALAH!** Kehilangan ${economyManager.formatCoin(bet)}.`}\n\n💵 **Saldo Dompet:** **${economyManager.formatCoin(after.wallet)}**`)
+        .setTimestamp();
+
+      await message.reply({ embeds: [embed] });
+      replyTextOutput = `Rolet: ${game.won ? 'Menang' : 'Kalah'}`;
+      break;
+    }
+
+    case 'bj':
+    case 'blackjack': {
+      const betArg = (args[0] || '').toLowerCase();
+      const account = economyManager.getUser(userId);
+      const bet = ['all', 'semua'].includes(betArg) ? account.wallet : Number.parseInt(betArg, 10);
+      if (!Number.isSafeInteger(bet) || bet <= 0 || bet > account.wallet) {
+        const text = `Taruhan blackjack harus angka positif tidak melebihi dompet (${economyManager.formatCoin(account.wallet)}).\nFormat: \`${prefix}bj <taruhan/all>\``;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        break;
+      }
+
+      economyManager.removeWallet(userId, bet);
+      const game = gamesManager.playBlackjack(bet);
+
+      let luckyBonus = 0;
+      let luckyMsg = '';
+      if (game.result === 'win' || game.result === 'blackjack') {
+        const luckyStatus = economyManager.checkAndConsumeLucky(userId);
+        if (luckyStatus.hasLucky) {
+          luckyBonus = Math.floor(game.payout * 0.25);
+          luckyMsg = `\n🍀 **Bonus Jimat Hoki (+25%):** +${economyManager.formatCoin(luckyBonus)} (Sisa: ${luckyStatus.remaining}x)`;
+        }
+      }
+
+      const totalPayout = game.payout + luckyBonus;
+      if (totalPayout > 0) economyManager.addWallet(userId, totalPayout);
+
+      const after = economyManager.getUser(userId);
+      const playerCardStrs = game.playerCards.map(c => `[${c.str}]`).join(' ');
+      const dealerCardStrs = game.dealerCards.map(c => `[${c.str}]`).join(' ');
+
+      const embed = new EmbedBuilder()
+        .setColor(game.result === 'win' || game.result === 'blackjack' ? 0x57F287 : (game.result === 'draw' ? 0xFEE75C : 0xED4245))
+        .setTitle('🃏 Meja Kartu Blackjack 21')
+        .setDescription(`**${game.title}**\n\n👤 **Kartu Kamu:** ${playerCardStrs} (Total: **${game.playerTotal}**)\n🤖 **Kartu Dealer:** ${dealerCardStrs} (Total: **${game.dealerTotal}**)\n\n💰 **Taruhan:** ${economyManager.formatCoin(bet)}\n📊 **Hasil Bersih:** **${game.netProfit >= 0 ? '+' : ''}${economyManager.formatCoin(game.netProfit + luckyBonus)}**${luckyMsg}\n💵 **Saldo Dompet:** **${economyManager.formatCoin(after.wallet)}**`)
+        .setTimestamp();
+
+      await message.reply({ embeds: [embed] });
+      replyTextOutput = `Blackjack result: ${game.result}`;
+      break;
+    }
+
+    case 'suit':
+    case 'rps':
+    case 'gbk': {
+      const choiceArg = (args[0] || '').toLowerCase();
+      const betArg = (args[1] || '').toLowerCase();
+
+      if (!choiceArg) {
+        const text = `✌️ **CARA MAIN SUIT JEPANG**\nFormat: \`${prefix}suit <batu/gunting/kertas> [taruhan/all]\`\n\nContoh:\n• Gratis: \`${prefix}suit batu\`\n• Taruhan: \`${prefix}suit batu 500\``;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        break;
+      }
+
+      const account = economyManager.getUser(userId);
+      let bet = 0;
+      if (betArg) {
+        bet = ['all', 'semua'].includes(betArg) ? account.wallet : Number.parseInt(betArg, 10);
+        if (!Number.isSafeInteger(bet) || bet <= 0 || bet > account.wallet) {
+          const text = `Taruhan tidak valid! Saldo dompetmu: ${economyManager.formatCoin(account.wallet)}.`;
+          await message.reply({ content: text });
+          replyTextOutput = text;
+          break;
+        }
+        economyManager.removeWallet(userId, bet);
+      }
+
+      const game = gamesManager.playRPS(choiceArg, bet);
+
+      let luckyBonus = 0;
+      let luckyMsg = '';
+      if (game.result === 'win' && bet > 0) {
+        const luckyStatus = economyManager.checkAndConsumeLucky(userId);
+        if (luckyStatus.hasLucky) {
+          luckyBonus = Math.floor(bet * 0.25);
+          luckyMsg = `\n🍀 **Bonus Jimat Hoki (+25%):** +${economyManager.formatCoin(luckyBonus)} (Sisa: ${luckyStatus.remaining}x)`;
+        }
+      }
+
+      const totalPayout = game.payout + luckyBonus;
+      if (totalPayout > 0) economyManager.addWallet(userId, totalPayout);
+
+      const after = economyManager.getUser(userId);
+      let verdict = '';
+      if (game.result === 'win') {
+        verdict = `🎉 **KAMU MENANG!** ${bet > 0 ? `Hadiah: **+${economyManager.formatCoin(bet + luckyBonus)}**` : ''}${luckyMsg}`;
+      } else if (game.result === 'draw') {
+        verdict = '🤝 **HASIL SERI!** Pilihan sama, taruhan dikembalikan.';
+      } else {
+        verdict = `💀 **KAMU KALAH!** ${bet > 0 ? `Kehilangan ${economyManager.formatCoin(bet)}.` : ''}`;
+      }
+
+      const text = `✌️ **Duel Suit (Gunting Batu Kertas)**\nKamu: **${game.playerPick.emoji} ${game.playerPick.name.toUpperCase()}** vs Bot: **${game.botPick.emoji} ${game.botPick.name.toUpperCase()}**\n\n${verdict}\n💵 Saldo Dompet: **${economyManager.formatCoin(after.wallet)}**`;
+      await message.reply({ content: text });
+      replyTextOutput = text;
+      break;
+    }
+
+    case 'pacuankuda':
+    case 'horse':
+    case 'balap':
+    case 'balapan': {
+      const horseNo = Number(args[0]);
+      const betArg = (args[1] || '').toLowerCase();
+
+      if (!horseNo || horseNo < 1 || horseNo > 5) {
+        const text = `🏇 **PACUAN KUDA SAMUDRA**\nPilih nomor kuda jagoanmu (1 s/d 5)!\n\n1. 🐎 Halilintar Cepat\n2. 🦄 Pegasus Emas\n3. 🐴 Kuda Hitam Perkasa\n4. 🦓 Zebra Kilat Samudra\n5. 🏇 Spirit Sang Juara\n\nFormat: \`${prefix}pacuankuda <1-5> <taruhan/all>\`\n*(Payout Menang: 4x Lipat!)*\nContoh: \`${prefix}pacuankuda 1 500\``;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        break;
+      }
+
+      const account = economyManager.getUser(userId);
+      const bet = ['all', 'semua'].includes(betArg) ? account.wallet : Number.parseInt(betArg, 10);
+      if (!Number.isSafeInteger(bet) || bet <= 0 || bet > account.wallet) {
+        const text = `Taruhan tidak valid! Saldo dompetmu: ${economyManager.formatCoin(account.wallet)}. Format: \`${prefix}pacuankuda <1-5> <taruhan>\``;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        break;
+      }
+
+      economyManager.removeWallet(userId, bet);
+      const game = gamesManager.playHorseRace(horseNo, bet);
+
+      let luckyBonus = 0;
+      let luckyMsg = '';
+      if (game.won) {
+        const luckyStatus = economyManager.checkAndConsumeLucky(userId);
+        if (luckyStatus.hasLucky) {
+          luckyBonus = Math.floor(game.payout * 0.25);
+          luckyMsg = `\n🍀 **Bonus Jimat Hoki (+25%):** +${economyManager.formatCoin(luckyBonus)} (Sisa: ${luckyStatus.remaining}x)`;
+        }
+      }
+
+      const totalPayout = game.payout + luckyBonus;
+      if (totalPayout > 0) economyManager.addWallet(userId, totalPayout);
+
+      const after = economyManager.getUser(userId);
+      const embed = new EmbedBuilder()
+        .setColor(game.won ? 0x57F287 : 0xED4245)
+        .setTitle('🏇 Garis Akhir Balap Pacuan Kuda!')
+        .setDescription(`**Lintasan Balap:**\n${game.tracksText}\n\nJagoanmu: **#${game.myHorse.no} ${game.myHorse.name}**\nPemenang Juara 1: **#${game.winningHorse.no} ${game.winningHorse.name}**\n\n${game.won ? `🎉 **KUDA KAMU JUARA 1 (Payout 4x)!** Untung bersih: **+${economyManager.formatCoin(game.netProfit + luckyBonus)}**!${luckyMsg}` : `💀 **KUDA KAMU KALAH!** Kehilangan ${economyManager.formatCoin(bet)}.`}\n\n💵 Saldo Dompet: **${economyManager.formatCoin(after.wallet)}**`)
+        .setTimestamp();
+
+      await message.reply({ embeds: [embed] });
+      replyTextOutput = `Pacuan kuda selesai. Winner: ${game.winningHorse.name}`;
+      break;
+    }
+
+    case 'mines':
+    case 'ranjau': {
+      const mineArg = Number(args[0]);
+      const betArg = (args[1] || '').toLowerCase();
+
+      if (!mineArg || mineArg < 1 || mineArg > 5) {
+        const text = `💣 **CARA MAIN TEBAK PETAK RANJAU (MINES)**\nTantang petak 3x3 dan lewati ranjau untuk melipatgandakan koin!\n\nFormat: \`${prefix}mines <1-5_ranjau> <taruhan/all>\`\n\nTingkat kesulitan:\n• 1 Ranjau: Multiplier 1.4x (Sangat Aman)\n• 2 Ranjau: Multiplier 1.8x\n• 3 Ranjau: Multiplier 2.5x (Standar)\n• 4 Ranjau: Multiplier 3.8x\n• 5 Ranjau: Multiplier 5.5x (Ekstrem)\n\nContoh: \`${prefix}mines 3 500\``;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        break;
+      }
+
+      const account = economyManager.getUser(userId);
+      const bet = ['all', 'semua'].includes(betArg) ? account.wallet : Number.parseInt(betArg, 10);
+      if (!Number.isSafeInteger(bet) || bet <= 0 || bet > account.wallet) {
+        const text = `Taruhan tidak valid! Saldo dompetmu: ${economyManager.formatCoin(account.wallet)}. Format: \`${prefix}mines <1-5> <taruhan>\``;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        break;
+      }
+
+      economyManager.removeWallet(userId, bet);
+      const game = gamesManager.playMines(bet, mineArg);
+
+      let luckyBonus = 0;
+      let luckyMsg = '';
+      if (game.survived) {
+        const luckyStatus = economyManager.checkAndConsumeLucky(userId);
+        if (luckyStatus.hasLucky) {
+          luckyBonus = Math.floor(game.payout * 0.25);
+          luckyMsg = `\n🍀 **Bonus Jimat Hoki (+25%):** +${economyManager.formatCoin(luckyBonus)} (Sisa: ${luckyStatus.remaining}x)`;
+        }
+      }
+
+      const totalPayout = game.payout + luckyBonus;
+      if (totalPayout > 0) economyManager.addWallet(userId, totalPayout);
+
+      const after = economyManager.getUser(userId);
+      const embed = new EmbedBuilder()
+        .setColor(game.survived ? 0x57F287 : 0xED4245)
+        .setTitle('💣 Eksplorasi Petak Ranjau')
+        .setDescription(`**Peta Ranjau Terbuka (3x3):**\n\`\`\`\n${game.gridDisplay}\n\`\`\`\nJumlah Ranjau: **${game.mineCount} Ranjau**\nMultiplier: **${game.multiplier}x**\n\n${game.survived ? `💎 **SELAMAT! KAMU MELEWATI RANJAU DENGAN AMAN!**\nHasil bersih: **+${economyManager.formatCoin(game.netProfit + luckyBonus)}**!${luckyMsg}` : `💥 **KABOOM! KAMU MENGINJAK RANJAU!**\nKehilangan taruhan ${economyManager.formatCoin(bet)}.`}\n\n💵 Saldo Dompet: **${economyManager.formatCoin(after.wallet)}**`)
+        .setTimestamp();
+
+      await message.reply({ embeds: [embed] });
+      replyTextOutput = `Mines selesai: ${game.survived ? 'Selamat' : 'Meledak'}`;
+      break;
+    }
+
+    case 'math':
+    case 'hitung':
+    case 'matematika': {
+      const channelId = message.channel.id;
+      if (activeMathQuiz.has(channelId)) {
+        await message.reply({ content: '⚠️ Masih ada kuis hitung cepat yang sedang berlangsung di channel ini!' });
+        return;
+      }
+
+      const quiz = gamesManager.generateMathQuiz();
+      const session = {
+        jawaban: quiz.jawaban,
+        reward: quiz.reward,
+        timer: setTimeout(async () => {
+          if (activeMathQuiz.has(channelId)) {
+            await message.channel.send(`⏰ **Waktu Habis!** Jawaban yang benar adalah **${quiz.jawaban}**!`).catch(() => {});
+            activeMathQuiz.delete(channelId);
+          }
+        }, 30000)
+      };
+
+      activeMathQuiz.set(channelId, session);
+
+      const embed = new EmbedBuilder()
+        .setColor(0x3498DB)
+        .setTitle('🧠 KUIS HITUNG CEPAT REBUTAN KOIN!')
+        .setDescription(`Berapakah hasil dari:\n\n# **${quiz.soal} = ?**\n\n⏱️ Waktu: **30 detik**\n🎁 Hadiah tercepat: **+${economyManager.formatCoin(quiz.reward)}**\n*Ketik langsung angka jawabanmu di chat channel ini!*`)
+        .setTimestamp();
+
+      await message.reply({ embeds: [embed] });
+      replyTextOutput = `Kuis math dimulai: ${quiz.soal}`;
+      break;
+    }
+
+
+    case 'susunkata': {
+      const channelId = message.channel.id;
+      if (activeSusunKata.has(channelId)) {
+        const text = 'Masih ada game susun kata aktif di channel ini.';
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        break;
+      }
+      const game = gamesManager.getRandomSusunKata();
+      const session = { jawaban: game.kata.toLowerCase(), reward: game.reward, timer: null };
+      session.timer = setTimeout(async () => {
+        if (activeSusunKata.get(channelId) === session) {
+          activeSusunKata.delete(channelId);
+          await message.channel.send(`⏰ Waktu habis. Jawabannya **${game.kata.toUpperCase()}**.`).catch(() => {});
+        }
+      }, 60000);
+      activeSusunKata.set(channelId, session);
+      const text = `🔤 **Susun kata!**\nHuruf: **${game.acak}**\nPetunjuk: ${game.hint}\nHadiah: **${economyManager.formatCoin(game.reward)}**\nWaktu 60 detik, ketik jawaban di channel.`;
       await message.reply({ content: text });
       replyTextOutput = text;
       break;
@@ -1588,39 +2677,140 @@ async function handleCommand({ message, command, args, rawText }) {
     }
 
     // --- RESTORED COMMANDS: MENFESS / CONFESS ---
+    case 'afk': {
+      const reason = args.join(' ').trim() || 'AFK (Sedang tidak di tempat)';
+      afkManager.setAfk(userId, reason);
+
+      const afkEmbed = new EmbedBuilder()
+        .setColor(0xFEE75C)
+        .setTitle('💤 Status AFK Aktif')
+        .setDescription(`**${authorName}** sekarang berstatus **AFK**.\n📝 **Alasan:** *${reason}*`)
+        .setFooter({ text: 'Ketik pesan apa saja di server nanti untuk otomatis mencabut status AFK' })
+        .setTimestamp();
+
+      await message.reply({ embeds: [afkEmbed] });
+      replyTextOutput = `Status AFK aktif: ${reason}`;
+      return replyTextOutput;
+    }
+
+    case 'setmenfess':
+    case 'setconfess': {
+      if (!message.guild) {
+        return await message.reply({ content: '❌ Perintah ini hanya dapat digunakan di dalam server Discord!' });
+      }
+
+      const isOwner = config.ownerNumber && userId === config.ownerNumber;
+      const isAdmin = message.member && (message.member.permissions.has(PermissionsBitField.Flags.Administrator) || message.member.permissions.has(PermissionsBitField.Flags.ManageGuild));
+      if (!isAdmin && !isOwner) {
+        return await message.reply({ content: '❌ Kamu memerlukan izin `Administrator` atau `Manage Server` untuk mengatur channel menfess!' });
+      }
+
+      const targetChannel = message.mentions.channels.first() || (args[0] && message.guild.channels.cache.get(args[0])) || message.channel;
+      menfessManager.setMenfessChannel(message.guild.id, targetChannel.id);
+
+      const embed = new EmbedBuilder()
+        .setColor(0x57F287)
+        .setTitle('✅ Channel Menfess Berhasil Dikonfigurasi!')
+        .setDescription(`Mulai sekarang, seluruh pesan curhat/menfess anonim akan dikirimkan ke channel <#${targetChannel.id}>.\n\nMember bisa mengirim menfess dengan cara:\n• \`${prefix}menfess <pesan>\` di channel server (pesan pengirim otomatis terhapus)\n• Atau lewat **DM langsung ke bot** (\`${prefix}menfess <pesan>\`) agar 100% rahasia tanpa jejak!`)
+        .setTimestamp();
+
+      await message.reply({ embeds: [embed] });
+      replyTextOutput = `Channel menfess diatur ke ${targetChannel.name}`;
+      return replyTextOutput;
+    }
+
     case 'menfess':
     case 'confess': {
-      const targetUser = message.mentions.users.first() || (args[0] && /^\d{17,20}$/.test(args[0]) ? await client.users.fetch(args[0]).catch(() => null) : null);
-      const textMsg = targetUser ? (message.mentions.users.first() ? args.slice(1).join(' ') : args.slice(1).join(' ')) : '';
-
-      if (!targetUser || !textMsg) {
-        const text = `💌 **Format Menfess (Pesan Rahasia Anonim):**\n\`${prefix}menfess @user <pesan kamu>\` atau \`${prefix}menfess <User_ID> <pesan kamu>\``;
-        await message.reply({ content: text });
-        replyTextOutput = text;
-        return replyTextOutput;
+      let mediaUrl = null;
+      if (message.attachments && message.attachments.size > 0) {
+        const att = message.attachments.first();
+        if (!att.contentType || att.contentType.startsWith('image/')) {
+          mediaUrl = att.url;
+        }
       }
 
-      try {
-        const embed = new EmbedBuilder()
-          .setColor(0xFF69B4)
-          .setTitle('💌 Pesan Rahasia Menfess Baru!')
-          .setDescription(`"${textMsg}"`)
-          .setFooter({ text: 'Pengirim dirahasiakan oleh bot • Balas lewat bot tidak tersedia' })
-          .setTimestamp();
+      const isDirectDm = args[0] && args[0].toLowerCase() === 'dm';
+      if (isDirectDm) {
+        const targetUser = message.mentions.users.first() || (args[1] && /^\d{17,20}$/.test(args[1]) ? await client.users.fetch(args[1]).catch(() => null) : null);
+        const textMsg = targetUser ? (message.mentions.users.first() ? args.slice(2).join(' ') : args.slice(2).join(' ')) : '';
 
-        await targetUser.send({ embeds: [embed] });
-
-        if (message.guild && message.deletable) {
-          try { await message.delete(); } catch (_) {}
+        if (!targetUser || !textMsg) {
+          const text = `💌 **Format Menfess Privat via DM User:**\n\`${prefix}menfess dm @user <pesan kamu>\``;
+          await message.reply({ content: text });
+          replyTextOutput = text;
+          return replyTextOutput;
         }
 
-        const confirmMsg = await message.channel.send({ content: `✅ Pesan rahasia berhasil dikirimkan ke **${targetUser.tag}**!` });
-        setTimeout(() => confirmMsg.delete().catch(() => {}), 5000);
-        replyTextOutput = 'Menfess terkirim.';
-      } catch (err) {
-        await message.reply({ content: `❌ Gagal mengirim menfess ke user tersebut (mungkin DM ditutup): ${err.message}` });
+        try {
+          const embed = new EmbedBuilder()
+            .setColor(0xFF69B4)
+            .setTitle('💌 Pesan Rahasia Menfess Baru!')
+            .setDescription(`"${textMsg}"`)
+            .setFooter({ text: 'Pengirim dirahasiakan oleh bot • Balas lewat bot tidak tersedia' })
+            .setTimestamp();
+
+          if (mediaUrl) embed.setImage(mediaUrl);
+
+          await targetUser.send({ embeds: [embed] });
+
+          if (message.guild && message.deletable) {
+            try { await message.delete(); } catch (_) {}
+          }
+
+          const confirmMsg = await message.channel.send({ content: `✅ Pesan rahasia berhasil dikirimkan ke **${targetUser.tag}**!` });
+          setTimeout(() => confirmMsg.delete().catch(() => {}), 5000);
+          replyTextOutput = 'Menfess terkirim.';
+          return replyTextOutput;
+        } catch (err) {
+          await message.reply({ content: `❌ Gagal mengirim menfess ke user tersebut (mungkin DM ditutup): ${err.message}` });
+          return;
+        }
       }
-      break;
+
+      const textMsg = args.join(' ').trim();
+      if (!textMsg && !mediaUrl) {
+        const guideText = [
+          '💌 **Format Pengiriman Menfess / Pesan Anonim:**',
+          `• **Kirim ke Channel Server:** \`${prefix}menfess <pesan kamu>\` (pesan kamu otomatis terhapus)`,
+          `• **Kirim via DM Bot:** Kirim pesan ke DM bot \`${prefix}menfess <pesan>\` (100% aman tanpa jejak)`,
+          `• **Kirim ke DM Orang Tertentu:** \`${prefix}menfess dm @user <pesan>\``,
+          `• **Atur Channel Menfess (Admin):** \`${prefix}setmenfess #channel\``
+        ].join('\n');
+        await message.reply({ content: guideText });
+        return;
+      }
+
+      if (message.guild && message.deletable) {
+        try { await message.delete(); } catch (_) {}
+      }
+
+      let targetChannel = null;
+      if (message.guild) {
+        const cfg = menfessManager.getMenfessConfig(message.guild.id);
+        if (cfg && cfg.channelId) {
+          targetChannel = message.guild.channels.cache.get(cfg.channelId) || await client.channels.fetch(cfg.channelId).catch(() => null);
+        }
+        if (!targetChannel) {
+          targetChannel = message.channel;
+        }
+      }
+
+      if (!targetChannel) {
+        await message.channel.send({ content: '❌ Tidak dapat menemukan channel pengiriman menfess.' });
+        return;
+      }
+
+      const count = menfessManager.incrementAndGetCount(message.guild ? message.guild.id : 'global');
+      const embed = menfessManager.buildMenfessEmbed({ count, text: textMsg, mediaUrl });
+      await targetChannel.send({ embeds: [embed] });
+
+      if (message.guild && targetChannel.id !== message.channel.id) {
+        const notif = await message.channel.send({ content: `✅ Menfess anonim berhasil diposting ke <#${targetChannel.id}>!` });
+        setTimeout(() => notif.delete().catch(() => {}), 4000);
+      }
+
+      replyTextOutput = `Menfess #${count} berhasil dikirim.`;
+      return replyTextOutput;
     }
 
     // --- RESTORED COMMANDS: SERVER MODERATION ---
@@ -1860,8 +3050,38 @@ client.on('messageCreate', async (message) => {
     if (guess === session.jawaban) {
       clearTimeout(session.timer);
       activeTebakKata.delete(channelId);
+      const prize = 350;
+      economyManager.addWallet(message.author.id, prize);
       await message.reply({
-        content: `🎉 **BENAR!** Selamat **${message.author.displayName || message.author.username}**, jawabannya memang **${session.jawaban.toUpperCase()}**!`
+        content: `🎉 **BENAR!** Selamat **${message.author.displayName || message.author.username}**, jawabannya memang **${session.jawaban.toUpperCase()}**!\n🎁 Hadiah: **+${economyManager.formatCoin(prize)}**`
+      });
+      return;
+    }
+  }
+
+  // Kuis matematika cepat aktif dapat dijawab oleh siapa pun di channel
+  if (activeMathQuiz.has(channelId)) {
+    const session = activeMathQuiz.get(channelId);
+    if (message.content.trim() === session.jawaban) {
+      clearTimeout(session.timer);
+      activeMathQuiz.delete(channelId);
+      economyManager.addWallet(message.author.id, session.reward);
+      await message.reply({
+        content: `🎉 **BENAR & TEPAT!** Selamat **${message.author.displayName || message.author.username}**, jawaban hitung cepatmu **${session.jawaban}** benar!\n🎁 Hadiah koin: **+${economyManager.formatCoin(session.reward)}**`
+      });
+      return;
+    }
+  }
+
+  // Tebakan susun kata aktif dapat dijawab oleh siapa pun di channel.
+  if (activeSusunKata.has(channelId)) {
+    const session = activeSusunKata.get(channelId);
+    if (message.content.toLowerCase().trim() === session.jawaban) {
+      clearTimeout(session.timer);
+      activeSusunKata.delete(channelId);
+      economyManager.addWallet(message.author.id, session.reward);
+      await message.reply({
+        content: `🎉 **Benar!** Jawabannya **${session.jawaban.toUpperCase()}**. Kamu mendapat **+${economyManager.formatCoin(session.reward)}**!`
       });
       return;
     }
