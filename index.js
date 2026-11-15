@@ -1163,29 +1163,70 @@ async function handleCommand({ message, command, args, rawText }) {
         const mediaResult = await getInstagramMedia(url);
         const items = Array.isArray(mediaResult) ? mediaResult : (mediaResult && mediaResult.url ? [mediaResult] : []);
         if (items.length > 0) {
-          const media = items[0];
-          const downloadUrl = media.url;
-          const res = await axios.get(downloadUrl, { 
-            responseType: 'arraybuffer', 
-            timeout: 45000,
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
-          });
-          const buf = Buffer.from(res.data);
-          const isVideo = media.type === 'video' || media.isVideo || downloadUrl.includes('.mp4') || (res.headers && res.headers['content-type'] && res.headers['content-type'].includes('video'));
-          const ext = isVideo ? 'mp4' : 'jpg';
+          // Download media (jika carousel, ambil hingga 5 media agar tidak melebihi kuota pesan)
+          const maxDownload = Math.min(items.length, 5);
+          const filesToSend = [];
+          const oversizedUrls = [];
 
-          if (buf.length > 24 * 1024 * 1024) {
-            await message.reply({
-              content: `✅ **Instagram Downloader**\nUkuran file melebihi batas upload Discord (25 MB). Silakan download langsung melalui link berikut:\n🔗 [Download Media](${downloadUrl})`
-            });
-          } else {
-            const file = new AttachmentBuilder(buf, { name: `instagram_${Date.now()}.${ext}` });
-            await message.reply({
-              content: `✅ **Instagram Downloader**\n${media.caption ? `💬 *${media.caption.slice(0, 150)}...*` : ''}`,
-              files: [file]
-            });
+          for (let i = 0; i < maxDownload; i++) {
+            const media = items[i];
+            const downloadUrl = media.url;
+            try {
+              const res = await axios.get(downloadUrl, { 
+                responseType: 'arraybuffer', 
+                timeout: 45000,
+                headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+              });
+              const buf = Buffer.from(res.data);
+              
+              // Deteksi format file secara akurat dari buffer atau URL
+              let ext = 'mp4';
+              if (buf.length >= 8) {
+                const subHeader = buf.subarray(4, 8).toString();
+                if (subHeader === 'ftyp' || buf.subarray(0, 4).toString() === 'moov') {
+                  ext = 'mp4';
+                } else if (buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF) {
+                  ext = 'jpg';
+                } else if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47) {
+                  ext = 'png';
+                } else if (media.type === 'video' || downloadUrl.includes('.mp4')) {
+                  ext = 'mp4';
+                } else {
+                  ext = 'jpg';
+                }
+              }
+
+              if (buf.length > 24 * 1024 * 1024) {
+                oversizedUrls.push(downloadUrl);
+              } else {
+                filesToSend.push(new AttachmentBuilder(buf, { name: `instagram_${Date.now()}_${i + 1}.${ext}` }));
+              }
+            } catch (dlErr) {
+              console.error(`Gagal download item Instagram #${i + 1}:`, dlErr.message);
+            }
           }
-          replyTextOutput = 'Instagram media berhasil dikirim.';
+
+          if (filesToSend.length > 0) {
+            let contentText = `✅ **Instagram Downloader**`;
+            if (items.length > 1) {
+              contentText += ` (${filesToSend.length} media)`;
+            }
+            if (oversizedUrls.length > 0) {
+              contentText += `\n⚠️ Beberapa media melebihi limit 25MB:\n${oversizedUrls.map(u => `🔗 [Download Langsung](${u})`).join('\n')}`;
+            }
+            await message.reply({
+              content: contentText,
+              files: filesToSend
+            });
+            replyTextOutput = 'Instagram media berhasil dikirim.';
+          } else if (oversizedUrls.length > 0) {
+            await message.reply({
+              content: `✅ **Instagram Downloader**\nUkuran file melebihi batas upload Discord (25 MB). Silakan unduh langsung melalui link berikut:\n${oversizedUrls.map(u => `🔗 [Download Media](${u})`).join('\n')}`
+            });
+            replyTextOutput = 'Instagram media link dikirim.';
+          } else {
+            await message.reply({ content: '❌ Gagal mengunduh file media dari link Instagram tersebut.' });
+          }
         } else {
           await message.reply({ content: '❌ Tidak dapat menemukan media dari link Instagram tersebut. Pastikan postingan/Reel berasal dari akun publik (bukan akun privat).' });
         }
