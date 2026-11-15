@@ -762,7 +762,8 @@ async function getInstagramMedia(url) {
   }
 
   if (result.status !== 'ok' || !result.data) {
-    throw new Error(result.mess || 'Gagal mengambil media Instagram. Pastikan akun atau postingan bersifat publik.');
+    const cleanMsg = result.mess ? igStripTags(result.mess) : '';
+    throw new Error(cleanMsg || 'Gagal mengambil media Instagram. Pastikan akun atau postingan bersifat publik.');
   }
 
   const html = result.data;
