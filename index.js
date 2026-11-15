@@ -6,7 +6,8 @@ const {
   EmbedBuilder, 
   AttachmentBuilder, 
   ActivityType,
-  PermissionsBitField
+  PermissionsBitField,
+  Events
 } = require('discord.js');
 const http = require('http');
 const fs = require('fs');
@@ -60,7 +61,13 @@ const aiSettingsFile = path.join(dataDir, 'ai-settings.json');
 function loadAiSettings() {
   try {
     if (fs.existsSync(aiSettingsFile)) {
-      return JSON.parse(fs.readFileSync(aiSettingsFile, 'utf8'));
+      const parsed = JSON.parse(fs.readFileSync(aiSettingsFile, 'utf8'));
+      if (parsed && typeof parsed === 'object') {
+        if (!parsed.personas || typeof parsed.personas !== 'object') {
+          parsed.personas = {};
+        }
+        return parsed;
+      }
     }
   } catch (_) {}
   return { personas: {} };
@@ -68,6 +75,8 @@ function loadAiSettings() {
 
 function saveAiSettings(settings) {
   try {
+    if (!settings || typeof settings !== 'object') settings = { personas: {} };
+    if (!settings.personas || typeof settings.personas !== 'object') settings.personas = {};
     fs.writeFileSync(aiSettingsFile, JSON.stringify(settings, null, 2), 'utf8');
   } catch (err) {
     console.error('Gagal menyimpan ai-settings:', err.message);
@@ -336,7 +345,7 @@ async function handleCommand({ message, command, args, rawText }) {
       }
 
       const settings = loadAiSettings();
-      const userPersona = settings.personas[userId] || '';
+      const userPersona = (settings.personas && settings.personas[userId]) || '';
       const history = getAiHistory(userId);
 
       try {
@@ -366,6 +375,8 @@ async function handleCommand({ message, command, args, rawText }) {
     case 'setpersona': {
       const prompt = args.join(' ').trim();
       const settings = loadAiSettings();
+
+      if (!settings.personas) settings.personas = {};
 
       if (!prompt) {
         const current = settings.personas[userId];
@@ -398,7 +409,7 @@ async function handleCommand({ message, command, args, rawText }) {
 
     case 'mypersona': {
       const settings = loadAiSettings();
-      const current = settings.personas[userId];
+      const current = settings.personas ? settings.personas[userId] : null;
       const text = current 
         ? `🎭 **Persona aktif kamu:** "${current}"` 
         : 'ℹ️ Kamu saat ini memakai persona standar.';
@@ -1608,7 +1619,7 @@ client.on('messageCreate', async (message) => {
 });
 
 // Event: Client Ready
-client.once('ready', () => {
+client.once(Events.ClientReady, () => {
   console.log('========================================');
   console.log(`✅ ${config.botName} Berhasil Terhubung & Aktif!`);
   console.log(`🤖 Logged in as: ${client.user.tag} (ID: ${client.user.id})`);
