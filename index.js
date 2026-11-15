@@ -533,27 +533,32 @@ async function handleCommand({ message, command, args, rawText }) {
             ].join('\n')
           },
 {
-            name: '💰 Ekonomi, Pekerjaan & Penukaran Koin',
+            name: '💰 Ekonomi & Penghasilan',
             value: [
               `\`${prefix}bal\` - Cek saldo dompet, bank, streak & efek buff`,
-              `\`${prefix}daily\` - Klaim koin harian (Bonus Streak & Mystery Box!)`,
-              `\`${prefix}work\` - Bekerja halal mencari nafkah (cooldown 30 mnt)`,
-              `\`${prefix}crime\` - Aksi kejahatan berisiko tinggi (reward besar!)`,
-              `\`${prefix}beg\` - Mengemis recehan santai (cooldown 5 mnt)`,
+              `\`${prefix}daily\` - Klaim koin harian (Bonus Streak & Hadiah)`,
+              `\`${prefix}work\` - Bekerja halal mencari nafkah (cooldown 30m)`,
+              `\`${prefix}crime\` - Aksi kejahatan berisiko (reward besar)`,
+              `\`${prefix}beg\` - Mengemis recehan santai (cooldown 5m)`,
               `\`${prefix}mancing\` - Memancing ikan & harta karun samudra`,
-              `\`${prefix}mining\` - Menambang mineral batu, emas, berlian & zamrud`,
-              `\`${prefix}jual [all]\` - Jual hasil tangkapan & tambang jadi koin`,
-              `\`${prefix}dep\` / \`${prefix}wd\` - Deposit & penarikan koin di bank`,
-              `\`${prefix}pay @user <jumlah>\` - Transfer koin ke teman`,
-              `\`${prefix}rob @user\` - Coba rampok dompet (bisa ditangkal shield/brankas)`,
-              `\`${prefix}rich\` - Top 10 member terkaya di server`,
-              `\`${prefix}shop\` - Toko penukaran koin (16+ item, alat, buff & gelar)`,
-              `\`${prefix}buy <id>\` - Beli item / alat / gelar prestise`,
-              `\`${prefix}inv\` - Cek inventaris & isi tas kamu`,
-              `\`${prefix}use <id>\` - Gunakan item konsumsi / buka Mystery Box`,
+              `\`${prefix}mining\` - Menambang mineral emas, berlian & zamrud`,
+              `\`${prefix}jual [all]\` - Jual hasil pancingan & tambang jadi koin`,
+              `\`${prefix}dep\` / \`${prefix}wd\` - Simpan & tarik koin di bank`,
+              `\`${prefix}pay @user <jml>\` - Kirim koin ke teman`,
+              `\`${prefix}rob @user\` - Coba rampok dompet member lain`,
+              `\`${prefix}rich\` - Papan peringkat member terkaya server`
+            ].join('\n')
+          },
+          {
+            name: '🛒 Toko & Hadiah Koin',
+            value: [
+              `\`${prefix}shop\` - Katalog 16+ item, alat, buff & gelar`,
+              `\`${prefix}buy <id>\` - Beli item / alat bantu / gelar prestise`,
+              `\`${prefix}inv\` - Cek inventaris & isi ransel kamu`,
+              `\`${prefix}use <id>\` - Pakai item konsumsi / buka Mystery Box`,
               `\`${prefix}settitle <gelar>\` - Pasang custom gelar profil impian`,
-              `\`${prefix}lotre\` - Beli tiket & pantau akumulasi jackpot server`,
-              `\`${prefix}gift @user [pesan]\` - Kirim paket kado koin ke teman`,
+              `\`${prefix}lotre\` - Beli tiket & pantau jackpot lotre server`,
+              `\`${prefix}gift @user [pesan]\` - Kirim kado koin kejutan ke teman`,
               `\`${prefix}prank @user\` - Lemparkan bom tepung jahil ke teman`
             ].join('\n')
           },
