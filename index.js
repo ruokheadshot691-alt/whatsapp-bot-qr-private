@@ -1160,22 +1160,41 @@ async function handleCommand({ message, command, args, rawText }) {
       }
       try {
         await message.channel.sendTyping();
-        const media = await getInstagramMedia(url);
-        if (media && media.url) {
-          const res = await axios.get(media.url, { responseType: 'arraybuffer', timeout: 45000 });
-          const isVideo = media.isVideo || media.url.includes('.mp4');
-          const ext = isVideo ? 'mp4' : 'jpg';
-          const file = new AttachmentBuilder(Buffer.from(res.data), { name: `instagram.${ext}` });
-          await message.reply({
-            content: `✅ **Instagram Downloader**\n${media.caption ? `💬 *${media.caption.slice(0, 150)}...*` : ''}`,
-            files: [file]
+        const mediaResult = await getInstagramMedia(url);
+        const items = Array.isArray(mediaResult) ? mediaResult : (mediaResult && mediaResult.url ? [mediaResult] : []);
+        if (items.length > 0) {
+          const media = items[0];
+          const downloadUrl = media.url;
+          const res = await axios.get(downloadUrl, { 
+            responseType: 'arraybuffer', 
+            timeout: 45000,
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
           });
+          const buf = Buffer.from(res.data);
+          const isVideo = media.type === 'video' || media.isVideo || downloadUrl.includes('.mp4') || (res.headers && res.headers['content-type'] && res.headers['content-type'].includes('video'));
+          const ext = isVideo ? 'mp4' : 'jpg';
+
+          if (buf.length > 24 * 1024 * 1024) {
+            await message.reply({
+              content: `✅ **Instagram Downloader**\nUkuran file melebihi batas upload Discord (25 MB). Silakan download langsung melalui link berikut:\n🔗 [Download Media](${downloadUrl})`
+            });
+          } else {
+            const file = new AttachmentBuilder(buf, { name: `instagram_${Date.now()}.${ext}` });
+            await message.reply({
+              content: `✅ **Instagram Downloader**\n${media.caption ? `💬 *${media.caption.slice(0, 150)}...*` : ''}`,
+              files: [file]
+            });
+          }
           replyTextOutput = 'Instagram media berhasil dikirim.';
         } else {
-          await message.reply({ content: '❌ Tidak dapat menemukan media dari link Instagram tersebut.' });
+          await message.reply({ content: '❌ Tidak dapat menemukan media dari link Instagram tersebut. Pastikan postingan/Reel berasal dari akun publik (bukan akun privat).' });
         }
       } catch (err) {
-        await message.reply({ content: `❌ Gagal download Instagram: ${err.message}` });
+        let msg = err.message || 'Terjadi kesalahan';
+        if (msg.toLowerCase().includes('private')) {
+          msg = 'Postingan/Reel berasal dari akun privat. Bot hanya dapat mengunduh konten dari akun publik.';
+        }
+        await message.reply({ content: `❌ Gagal download Instagram: ${msg}` });
       }
       break;
     }
