@@ -423,6 +423,83 @@ async function removeDiscordTitleRole(guild, member, titleText) {
   }
 }
 
+// Helper Manajemen & Verifikasi Owner Bot
+function getCustomOwners() {
+  try {
+    const ownersFile = path.join(__dirname, 'data', 'owners.json');
+    if (fs.existsSync(ownersFile)) {
+      const parsed = JSON.parse(fs.readFileSync(ownersFile, 'utf-8'));
+      if (Array.isArray(parsed)) return parsed;
+      if (parsed.owners && Array.isArray(parsed.owners)) return parsed.owners;
+    }
+  } catch (_) {}
+  return [];
+}
+
+function saveCustomOwners(ownersList) {
+  try {
+    const dir = path.join(__dirname, 'data');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const ownersFile = path.join(dir, 'owners.json');
+    fs.writeFileSync(ownersFile, JSON.stringify(ownersList, null, 2), 'utf-8');
+    return true;
+  } catch (err) {
+    console.error('Gagal menyimpan data/owners.json:', err.message);
+    return false;
+  }
+}
+
+function isBotOwner(message) {
+  if (!message || !message.author) return false;
+  const authorId = message.author.id;
+  if (!authorId) return false;
+
+  // 1. Eksekusi via console IPC (send.js)
+  if (authorId === 'console-owner' || message.isConsole) return true;
+
+  // 2. ID dari config.ownerId
+  if (config.ownerId) {
+    const configured = String(config.ownerId).split(',').map(s => s.trim()).filter(Boolean);
+    if (configured.includes(authorId)) return true;
+  }
+
+  // 3. ID dari data/owners.json
+  const customOwners = getCustomOwners();
+  if (customOwners.includes(authorId)) return true;
+
+  // 4. Discord Application Owner (User / Team)
+  const appOwner = client.application?.owner;
+  if (appOwner) {
+    if (appOwner.id && appOwner.id === authorId) return true;
+    if (appOwner.ownerId && appOwner.ownerId === authorId) return true;
+    if (appOwner.members && typeof appOwner.members.has === 'function' && appOwner.members.has(authorId)) return true;
+  }
+
+  // 5. Fallback jika config.ownerId belum diatur: pemilik server (Guild Owner)
+  if (!config.ownerId && customOwners.length === 0 && message.guild && message.guild.ownerId === authorId) {
+    return true;
+  }
+
+  return false;
+}
+
+// Parser jumlah angka fleksibel (mendukung 100k, 1.5m, 1jt, dll)
+function parseCoinAmount(str) {
+  if (!str) return NaN;
+  let clean = String(str).toLowerCase().trim();
+  const match = clean.match(/^(\d+(?:[.,]\d+)?)\s*(k|rb|ribu|m|jt|juta|b|miliar)$/);
+  if (match) {
+    const val = parseFloat(match[1].replace(',', '.'));
+    const unit = match[2];
+    if (['k', 'rb', 'ribu'].includes(unit)) return Math.floor(val * 1000);
+    if (['m', 'jt', 'juta'].includes(unit)) return Math.floor(val * 1000000);
+    if (['b', 'miliar'].includes(unit)) return Math.floor(val * 1000000000);
+  }
+  clean = clean.replace(/[,._]/g, '');
+  if (/^\d+$/.test(clean)) return Number(clean);
+  return NaN;
+}
+
 // Core Command Handler: Dapat dipanggil dari Discord chat maupun console CLI
 async function handleCommand({ message, command, args, rawText }) {
   const prefix = config.prefix || '.';
@@ -704,6 +781,18 @@ async function handleCommand({ message, command, args, rawText }) {
         .setFooter({ text: `${config.botName} • Semua Fitur Telah Dikembalikan Lengkap`, iconURL: client.user.displayAvatarURL() })
         .setTimestamp();
 
+      if (isBotOwner(message)) {
+        embed.addFields({
+          name: '👑 Menu Khusus Owner Bot',
+          value: [
+            `\`${prefix}addcoin [@user / me] <jml> [bank]\` - Beri koin ke siapa saja / diri sendiri`,
+            `\`${prefix}delcoin [@user / me] <jml> [bank]\` - Tarik / kurangi koin member`,
+            `\`${prefix}setcoin [@user / me] <jml> [bank]\` - Atur saldo koin spesifik`,
+            `\`${prefix}addowner @user\` - Tambah co-owner bot resmi`
+          ].join('\n')
+        });
+      }
+
       await message.reply({ embeds: [embed] });
       replyTextOutput = 'Menu berhasil ditampilkan di Discord.';
       break;
@@ -726,7 +815,29 @@ async function handleCommand({ message, command, args, rawText }) {
     }
 
     case 'owner': {
-      const text = `👑 **Owner Bot:** <@${config.ownerId || client.application?.owner?.id || 'Fatih'}>`;
+      const customList = getCustomOwners();
+      const appOwner = client.application?.owner;
+      const ownersSet = new Set();
+      if (config.ownerId) String(config.ownerId).split(',').map(s => s.trim()).filter(Boolean).forEach(id => ownersSet.add(id));
+      customList.forEach(id => ownersSet.add(id));
+      if (appOwner) {
+        if (appOwner.id) ownersSet.add(appOwner.id);
+        if (appOwner.ownerId) ownersSet.add(appOwner.ownerId);
+      }
+      const ownerTags = ownersSet.size > 0 ? Array.from(ownersSet).map(id => `<@${id}>`).join(', ') : (config.ownerId ? `<@${config.ownerId}>` : 'Belum diatur');
+
+      const isCallerOwner = isBotOwner(message);
+      let text = `👑 **Owner Bot Resmi:** ${ownerTags}\n\n`;
+      if (isCallerOwner) {
+        text += `✨ **Kamu terverifikasi sebagai Owner Bot!**\n` +
+          `• \`${prefix}addcoin <jumlah>\` — Tambah koin ke diri sendiri\n` +
+          `• \`${prefix}addcoin @user <jumlah>\` — Beri koin ke member lain\n` +
+          `• \`${prefix}delcoin [@user / me] <jumlah>\` — Kurangi koin\n` +
+          `• \`${prefix}setcoin [@user / me] <jumlah>\` — Setel jumlah koin\n` +
+          `• \`${prefix}addowner @user\` — Tambahkan co-owner bot`;
+      } else {
+        text += `ℹ️ Hubungi owner bot jika kamu membutuhkan bantuan atau koin.`;
+      }
       await message.reply({ content: text });
       replyTextOutput = text;
       break;
@@ -1660,6 +1771,323 @@ case 'daily':
       const text = result.success
         ? `💸 Terkirim **${economyManager.formatCoin(result.amount)}** ke **${target.displayName || target.username}**. Saldo dompetmu: **${economyManager.formatCoin(result.fromWallet)}**.`
         : `❌ ${result.error}`;
+      await message.reply({ content: text });
+      replyTextOutput = text;
+      break;
+    }
+
+    // --- PERINTAH OWNER: MANAJEMEN KOIN & OWNER ---
+    case 'addcoin':
+    case 'givecoin':
+    case 'tambahkoin':
+    case 'kasihkoin':
+    case 'addmoney': {
+      if (!isBotOwner(message)) {
+        const text = '⛔ **Akses Ditolak!** Perintah ini khusus untuk **Owner Bot**.';
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        break;
+      }
+
+      let targetUser = null;
+      let amount = NaN;
+      let destination = 'wallet';
+
+      const destIndex = args.findIndex(a => ['bank', 'dompet', 'wallet'].includes(a.toLowerCase()));
+      if (destIndex !== -1) {
+        destination = args[destIndex].toLowerCase() === 'bank' ? 'bank' : 'wallet';
+      }
+      const filteredArgs = args.filter((_, idx) => idx !== destIndex);
+
+      if (message.mentions && message.mentions.users.size > 0) {
+        targetUser = message.mentions.users.first();
+        for (const arg of filteredArgs) {
+          if (arg.startsWith('<@') && arg.endsWith('>')) continue;
+          const parsed = parseCoinAmount(arg);
+          if (!isNaN(parsed) && parsed > 0) {
+            amount = parsed;
+            break;
+          }
+        }
+      } else {
+        if (filteredArgs.length === 1) {
+          const parsed = parseCoinAmount(filteredArgs[0]);
+          if (!isNaN(parsed) && parsed > 0) {
+            targetUser = message.author;
+            amount = parsed;
+          }
+        } else if (filteredArgs.length >= 2) {
+          const first = filteredArgs[0].toLowerCase();
+          if (['me', 'self', 'diri', 'saya'].includes(first)) {
+            targetUser = message.author;
+            amount = parseCoinAmount(filteredArgs[1]);
+          } else if (/^\d{16,21}$/.test(filteredArgs[0])) {
+            try {
+              targetUser = await client.users.fetch(filteredArgs[0]).catch(() => null);
+            } catch (_) {}
+            if (!targetUser) {
+              targetUser = { id: filteredArgs[0], username: `User-${filteredArgs[0]}`, displayName: `User (${filteredArgs[0]})` };
+            }
+            amount = parseCoinAmount(filteredArgs[1]);
+          } else {
+            const parsed = parseCoinAmount(filteredArgs[0]);
+            if (!isNaN(parsed) && parsed > 0) {
+              targetUser = message.author;
+              amount = parsed;
+            }
+          }
+        }
+      }
+
+      if (!targetUser || isNaN(amount) || amount <= 0) {
+        const text = `👑 **Perintah Owner: Tambah Koin**\n` +
+          `• \`${prefix}addcoin <jumlah>\` — Tambah koin ke diri sendiri\n` +
+          `• \`${prefix}addcoin @user <jumlah>\` — Tambah koin ke orang lain\n` +
+          `• \`${prefix}addcoin <userID> <jumlah>\` — Tambah koin via Discord User ID\n` +
+          `• \`${prefix}addcoin @user <jumlah> bank\` — Masukkan langsung ke bank\n\n` +
+          `*Contoh:* \`${prefix}addcoin 1000000\` atau \`${prefix}addcoin @Rex 500k bank\``;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        break;
+      }
+
+      let updated;
+      if (destination === 'bank') {
+        updated = economyManager.addBank(targetUser.id, amount);
+      } else {
+        updated = economyManager.addWallet(targetUser.id, amount);
+      }
+
+      const isSelf = targetUser.id === message.author.id;
+      const targetLabel = isSelf ? `dirimu sendiri (<@${targetUser.id}>)` : `**${targetUser.displayName || targetUser.username}** (<@${targetUser.id}>)`;
+      const destLabel = destination === 'bank' ? 'Rekening Bank 🏦' : 'Dompet 💵';
+
+      const embed = new EmbedBuilder()
+        .setColor(0x57F287)
+        .setTitle('💸 [Owner Command] Koin Berhasil Ditambahkan!')
+        .setDescription(`Berhasil memberikan **+${economyManager.formatCoin(amount)}** ke ${targetLabel} (${destLabel}).`)
+        .addFields(
+          { name: '💵 Dompet', value: economyManager.formatCoin(updated.wallet), inline: true },
+          { name: '🏦 Bank', value: economyManager.formatCoin(updated.bank), inline: true },
+          { name: '💎 Total Saldo', value: economyManager.formatCoin(updated.wallet + updated.bank), inline: true }
+        )
+        .setFooter({ text: `Diberikan oleh Owner: ${message.author.tag}`, iconURL: message.author.displayAvatarURL() })
+        .setTimestamp();
+
+      await message.reply({ embeds: [embed] });
+      replyTextOutput = `Owner berhasil menambahkan ${amount} koin ke ${targetUser.id}`;
+      break;
+    }
+
+    case 'delcoin':
+    case 'removecoin':
+    case 'kurangkoin':
+    case 'tarikkoin': {
+      if (!isBotOwner(message)) {
+        const text = '⛔ **Akses Ditolak!** Perintah ini khusus untuk **Owner Bot**.';
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        break;
+      }
+
+      let targetUser = null;
+      let amount = NaN;
+      let destination = 'wallet';
+
+      const destIndex = args.findIndex(a => ['bank', 'dompet', 'wallet'].includes(a.toLowerCase()));
+      if (destIndex !== -1) {
+        destination = args[destIndex].toLowerCase() === 'bank' ? 'bank' : 'wallet';
+      }
+      const filteredArgs = args.filter((_, idx) => idx !== destIndex);
+
+      if (message.mentions && message.mentions.users.size > 0) {
+        targetUser = message.mentions.users.first();
+        for (const arg of filteredArgs) {
+          if (arg.startsWith('<@') && arg.endsWith('>')) continue;
+          const parsed = parseCoinAmount(arg);
+          if (!isNaN(parsed) && parsed > 0) {
+            amount = parsed;
+            break;
+          }
+        }
+      } else {
+        if (filteredArgs.length === 1) {
+          const parsed = parseCoinAmount(filteredArgs[0]);
+          if (!isNaN(parsed) && parsed > 0) {
+            targetUser = message.author;
+            amount = parsed;
+          }
+        } else if (filteredArgs.length >= 2) {
+          const first = filteredArgs[0].toLowerCase();
+          if (['me', 'self', 'diri', 'saya'].includes(first)) {
+            targetUser = message.author;
+            amount = parseCoinAmount(filteredArgs[1]);
+          } else if (/^\d{16,21}$/.test(filteredArgs[0])) {
+            try {
+              targetUser = await client.users.fetch(filteredArgs[0]).catch(() => null);
+            } catch (_) {}
+            if (!targetUser) {
+              targetUser = { id: filteredArgs[0], username: `User-${filteredArgs[0]}`, displayName: `User (${filteredArgs[0]})` };
+            }
+            amount = parseCoinAmount(filteredArgs[1]);
+          }
+        }
+      }
+
+      if (!targetUser || isNaN(amount) || amount <= 0) {
+        const text = `Format: \`${prefix}delcoin [@user / me / userID] <jumlah> [bank]\``;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        break;
+      }
+
+      let updated;
+      if (destination === 'bank') {
+        updated = economyManager.removeBank(targetUser.id, amount);
+      } else {
+        updated = economyManager.removeWallet(targetUser.id, amount);
+      }
+
+      const isSelf = targetUser.id === message.author.id;
+      const targetLabel = isSelf ? `dirimu sendiri (<@${targetUser.id}>)` : `**${targetUser.displayName || targetUser.username}** (<@${targetUser.id}>)`;
+      const destLabel = destination === 'bank' ? 'Rekening Bank 🏦' : 'Dompet 💵';
+
+      const text = `✂️ **[Owner] Saldo Dikurangi!** Berhasil menarik **-${economyManager.formatCoin(amount)}** dari ${targetLabel} (${destLabel}).\nSisa Dompet: **${economyManager.formatCoin(updated.wallet)}** | Bank: **${economyManager.formatCoin(updated.bank)}**.`;
+      await message.reply({ content: text });
+      replyTextOutput = text;
+      break;
+    }
+
+    case 'setcoin':
+    case 'setmoney': {
+      if (!isBotOwner(message)) {
+        const text = '⛔ **Akses Ditolak!** Perintah ini khusus untuk **Owner Bot**.';
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        break;
+      }
+
+      let targetUser = null;
+      let amount = NaN;
+      let destination = 'wallet';
+
+      const destIndex = args.findIndex(a => ['bank', 'dompet', 'wallet'].includes(a.toLowerCase()));
+      if (destIndex !== -1) {
+        destination = args[destIndex].toLowerCase() === 'bank' ? 'bank' : 'wallet';
+      }
+      const filteredArgs = args.filter((_, idx) => idx !== destIndex);
+
+      if (message.mentions && message.mentions.users.size > 0) {
+        targetUser = message.mentions.users.first();
+        for (const arg of filteredArgs) {
+          if (arg.startsWith('<@') && arg.endsWith('>')) continue;
+          const parsed = parseCoinAmount(arg);
+          if (!isNaN(parsed) && parsed >= 0) {
+            amount = parsed;
+            break;
+          }
+        }
+      } else {
+        if (filteredArgs.length === 1) {
+          const parsed = parseCoinAmount(filteredArgs[0]);
+          if (!isNaN(parsed) && parsed >= 0) {
+            targetUser = message.author;
+            amount = parsed;
+          }
+        } else if (filteredArgs.length >= 2) {
+          const first = filteredArgs[0].toLowerCase();
+          if (['me', 'self', 'diri', 'saya'].includes(first)) {
+            targetUser = message.author;
+            amount = parseCoinAmount(filteredArgs[1]);
+          } else if (/^\d{16,21}$/.test(filteredArgs[0])) {
+            try {
+              targetUser = await client.users.fetch(filteredArgs[0]).catch(() => null);
+            } catch (_) {}
+            if (!targetUser) {
+              targetUser = { id: filteredArgs[0], username: `User-${filteredArgs[0]}`, displayName: `User (${filteredArgs[0]})` };
+            }
+            amount = parseCoinAmount(filteredArgs[1]);
+          }
+        }
+      }
+
+      if (!targetUser || isNaN(amount) || amount < 0) {
+        const text = `Format: \`${prefix}setcoin [@user / me / userID] <jumlah> [bank]\``;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        break;
+      }
+
+      let updated;
+      if (destination === 'bank') {
+        updated = economyManager.setBank(targetUser.id, amount);
+      } else {
+        updated = economyManager.setWallet(targetUser.id, amount);
+      }
+
+      const isSelf = targetUser.id === message.author.id;
+      const targetLabel = isSelf ? `dirimu sendiri (<@${targetUser.id}>)` : `**${targetUser.displayName || targetUser.username}** (<@${targetUser.id}>)`;
+      const destLabel = destination === 'bank' ? 'Rekening Bank 🏦' : 'Dompet 💵';
+
+      const text = `🔧 **[Owner] Saldo Diatur!** Saldo ${destLabel} untuk ${targetLabel} telah disetel menjadi **${economyManager.formatCoin(amount)}**.\nDompet: **${economyManager.formatCoin(updated.wallet)}** | Bank: **${economyManager.formatCoin(updated.bank)}**.`;
+      await message.reply({ content: text });
+      replyTextOutput = text;
+      break;
+    }
+
+    case 'addowner': {
+      if (!isBotOwner(message)) {
+        const text = '⛔ **Akses Ditolak!** Hanya owner bot yang bisa menambahkan owner baru.';
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        break;
+      }
+      let targetUser = message.mentions.users.first();
+      if (!targetUser && args[0] && /^\d{16,21}$/.test(args[0])) {
+        try {
+          targetUser = await client.users.fetch(args[0]).catch(() => null);
+        } catch (_) {}
+      }
+      if (!targetUser) {
+        const text = `Format: \`${prefix}addowner @user\` atau \`${prefix}addowner <userID>\``;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        break;
+      }
+      const list = getCustomOwners();
+      if (!list.includes(targetUser.id)) {
+        list.push(targetUser.id);
+        saveCustomOwners(list);
+      }
+      const text = `✅ <@${targetUser.id}> berhasil didaftarkan sebagai **Owner Bot** resmi!`;
+      await message.reply({ content: text });
+      replyTextOutput = text;
+      break;
+    }
+
+    case 'delowner': {
+      if (!isBotOwner(message)) {
+        const text = '⛔ **Akses Ditolak!** Hanya owner bot yang bisa mencopot owner.';
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        break;
+      }
+      let targetUser = message.mentions.users.first();
+      if (!targetUser && args[0] && /^\d{16,21}$/.test(args[0])) {
+        try {
+          targetUser = await client.users.fetch(args[0]).catch(() => null);
+        } catch (_) {}
+      }
+      if (!targetUser) {
+        const text = `Format: \`${prefix}delowner @user\` atau \`${prefix}delowner <userID>\``;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        break;
+      }
+      let list = getCustomOwners();
+      list = list.filter(id => id !== targetUser.id);
+      saveCustomOwners(list);
+      const text = `✅ <@${targetUser.id}> telah dicopot dari daftar owner bot.`;
       await message.reply({ content: text });
       replyTextOutput = text;
       break;
@@ -3342,7 +3770,10 @@ client.on('messageCreate', async (message) => {
 });
 
 // Event: Client Ready
-client.once(Events.ClientReady, () => {
+client.once(Events.ClientReady, async () => {
+  try {
+    await client.application?.fetch();
+  } catch (_) {}
   console.log('========================================');
   console.log(`✅ ${config.botName} Berhasil Terhubung & Aktif!`);
   console.log(`🤖 Logged in as: ${client.user.tag} (ID: ${client.user.id})`);
