@@ -881,6 +881,14 @@ function useItem(userId, itemId) {
   return { success: true, message, newWallet: data[userId].wallet };
 }
 
+function setUserTitle(userId, title) {
+  const data = loadData();
+  getUser(userId);
+  data[userId].title = title ? String(title).trim() : null;
+  saveData(data);
+  return data[userId].title;
+}
+
 function setCustomTitle(userId, titleText) {
   const clean = String(titleText || '').trim();
   if (!clean || clean.length > 32) {
@@ -975,6 +983,7 @@ module.exports = {
   buyItem,
   useItem,
   setCustomTitle,
+  setUserTitle,
   checkAndConsumeLucky,
   getLotteryInfo,
   getLeaderboard,
