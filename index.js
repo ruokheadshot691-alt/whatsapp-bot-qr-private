@@ -308,6 +308,61 @@ async function parseCustomProfileInput({ message, args, rawArgsText, refMsg }) {
   };
 }
 
+// Sinkronisasi Role Discord untuk Gelar Toko Koin
+async function syncDiscordTitleRole(guild, member, titleText, colorHex) {
+  if (!guild || !member) return { success: false, reason: 'Bukan di dalam server Discord.' };
+
+  const botMember = guild.members.me || await guild.members.fetchMe().catch(() => null);
+  if (!botMember || !botMember.permissions.has(PermissionsBitField.Flags.ManageRoles)) {
+    return {
+      success: false,
+      reason: 'Bot belum diberi izin `Manage Roles` (Kelola Peran) di server ini.'
+    };
+  }
+
+  const roleName = String(titleText || '').trim().substring(0, 100);
+  if (!roleName) return { success: false, reason: 'Nama gelar kosong.' };
+
+  let role = guild.roles.cache.find(r => r.name.toLowerCase() === roleName.toLowerCase());
+  if (!role) {
+    try {
+      role = await guild.roles.create({
+        name: roleName,
+        color: colorHex || 0xFEE75C,
+        hoist: true,
+        reason: `Gelar toko koin oleh ${member.user.tag}`
+      });
+    } catch (err) {
+      return { success: false, reason: `Gagal membuat role: ${err.message}` };
+    }
+  }
+
+  if (botMember.roles.highest.position <= role.position) {
+    return {
+      success: false,
+      reason: 'Posisi role bot di Server Settings > Roles berada di bawah role ini. Tarik role bot ke posisi lebih atas.'
+    };
+  }
+
+  try {
+    await member.roles.add(role);
+    return { success: true, role };
+  } catch (err) {
+    return { success: false, reason: err.message };
+  }
+}
+
+async function removeDiscordTitleRole(guild, member, titleText) {
+  if (!guild || !member || !titleText) return;
+  const botMember = guild.members.me || await guild.members.fetchMe().catch(() => null);
+  if (!botMember || !botMember.permissions.has(PermissionsBitField.Flags.ManageRoles)) return;
+  const roleName = String(titleText).substring(0, 100).toLowerCase();
+  const role = guild.roles.cache.find(r => r.name.toLowerCase() === roleName);
+  if (role && member.roles.cache.has(role.id) && botMember.roles.highest.position > role.position) {
+    await member.roles.remove(role).catch(() => null);
+  }
+}
+
 // Core Command Handler: Dapat dipanggil dari Discord chat maupun console CLI
 async function handleCommand({ message, command, args, rawText }) {
   const prefix = config.prefix || '.';
@@ -553,13 +608,15 @@ async function handleCommand({ message, command, args, rawText }) {
             name: '🛒 Toko & Hadiah Koin',
             value: [
               `\`${prefix}shop\` - Katalog 16+ item, alat, buff & gelar`,
-              `\`${prefix}buy <id>\` - Beli item / alat bantu / gelar prestise`,
+              `\`${prefix}buy <id>\` - Beli item / alat bantu / gelar Discord`,
               `\`${prefix}inv\` - Cek inventaris & isi ransel kamu`,
-              `\`${prefix}use <id>\` - Pakai item konsumsi / buka Mystery Box`,
-              `\`${prefix}settitle <gelar>\` - Pasang custom gelar profil impian`,
-              `\`${prefix}lotre\` - Beli tiket & pantau jackpot lotre server`,
-              `\`${prefix}gift @user [pesan]\` - Kirim kado koin kejutan ke teman`,
-              `\`${prefix}prank @user\` - Lemparkan bom tepung jahil ke teman`
+              `\`${prefix}use <id>\` - Pakai item konsumsi / Mystery Box`,
+              `\`${prefix}settitle <gelar>\` - Pasang custom gelar profil & role`,
+              `\`${prefix}syncgelar\` - Pasang ulang role gelar di server`,
+              `\`${prefix}copotgelar\` - Lepas gelar & role kehormatan`,
+              `\`${prefix}lotre\` - Beli tiket & pantau jackpot server`,
+              `\`${prefix}gift @user [pesan]\` - Kirim kado koin ke teman`,
+              `\`${prefix}prank @user\` - Lemparkan bom tepung ke teman`
             ].join('\n')
           },
           {
@@ -1693,7 +1750,71 @@ case 'daily':
         break;
       }
 
-      const text = `🎉 **Gelar Baru Terpasang!** Profilmu kini menyandang gelar: **${result.title}**!\nCek kartu profil barumu dengan \`${prefix}bal\`.`;
+      let text = `🎉 **Gelar Baru Terpasang!** Profilmu kini menyandang gelar: **${result.title}**!\nCek profil barumu dengan \`${prefix}bal\`.`;
+      if (message.guild && message.member) {
+        const roleSync = await syncDiscordTitleRole(message.guild, message.member, result.title, 0xEB459E);
+        if (roleSync.success) {
+          text += `\n✨ **Role Discord Otomatis Terpasang:** Role **${result.title}** telah dibuatkan & disematkan ke akunmu!`;
+        } else {
+          text += `\nℹ️ *Catatan Role Discord:* ${roleSync.reason}`;
+        }
+      }
+      await message.reply({ content: text });
+      replyTextOutput = text;
+      break;
+    }
+
+    case 'syncgelar':
+    case 'pasangrole': {
+      if (!message.guild || !message.member) {
+        const text = '⚠️ Perintah ini hanya bisa digunakan di dalam server Discord!';
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        break;
+      }
+      const account = economyManager.getUser(userId);
+      if (!account.title) {
+        const text = `⚠️ Kamu belum memiliki gelar aktif! Beli gelar di \`${prefix}shop\` atau pasang dengan \`${prefix}settitle <nama gelar>\`.`;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        break;
+      }
+      const titleColors = {
+        '👑 Sultan Server': 0xFEE75C,
+        '🎲 Raja Judi': 0x57F287,
+        '🔥 Lord Tuff': 0xED4245,
+        '💎 Konglomerat Server': 0x5865F2
+      };
+      const color = titleColors[account.title] || 0xEB459E;
+      const roleSync = await syncDiscordTitleRole(message.guild, message.member, account.title, color);
+      if (roleSync.success) {
+        const text = `🎉 **Role Gelar Berhasil Disinkronkan!** Role **${account.title}** telah dipasangkan ke akunmu dan tampil terpisah di daftar member!`;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+      } else {
+        const text = `❌ **Gagal Memasang Role:** ${roleSync.reason}`;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+      }
+      break;
+    }
+
+    case 'copotgelar':
+    case 'cleartitle':
+    case 'removetitle': {
+      const account = economyManager.getUser(userId);
+      if (!account.title) {
+        const text = '⚠️ Kamu sedang tidak memakai gelar apa pun.';
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        break;
+      }
+      const oldTitle = account.title;
+      economyManager.setUserTitle(userId, null);
+      if (message.guild && message.member) {
+        await removeDiscordTitleRole(message.guild, message.member, oldTitle);
+      }
+      const text = `✅ Gelar **${oldTitle}** telah dicopot dari profilmu dan role Discord terkait telah dilepas.`;
       await message.reply({ content: text });
       replyTextOutput = text;
       break;
@@ -1777,7 +1898,10 @@ case 'daily':
     case 'leaderboard':
     case 'topkoin': {
       const entries = economyManager.getLeaderboard(10);
-      const lines = entries.map((entry, i) => `${['🥇','🥈','🥉'][i] || `**${i + 1}.**`} <@${entry.userId}> — **${economyManager.formatCoin(entry.total)}**`);
+      const lines = entries.map((entry, i) => {
+        const titleBadge = entry.title ? ` [${entry.title}]` : '';
+        return `${['🥇','🥈','🥉'][i] || `**${i + 1}.**`} <@${entry.userId}>${titleBadge} — **${economyManager.formatCoin(entry.total)}**`;
+      });
       const text = lines.length ? `🏆 **Top Member Terkaya**\n${lines.join('\n')}` : 'Belum ada data ekonomi.';
       await message.reply({ content: text });
       replyTextOutput = text;
@@ -1828,6 +1952,21 @@ case 'daily':
       let text = `🎉 **Pembelian Berhasil!** Kamu membeli **${item.emoji} ${item.name}** seharga **${economyManager.formatCoin(item.price)}**.\nSisa saldo dompetmu: **${economyManager.formatCoin(result.newWallet)}**.`;
       if (result.titleEquipped) {
         text += `\n👑 Gelar **${result.titleEquipped}** langsung terpasang di profilmu!`;
+        if (message.guild && message.member) {
+          const titleColors = {
+            '👑 Sultan Server': 0xFEE75C,
+            '🎲 Raja Judi': 0x57F287,
+            '🔥 Lord Tuff': 0xED4245,
+            '💎 Konglomerat Server': 0x5865F2
+          };
+          const color = titleColors[result.titleEquipped] || 0xFEE75C;
+          const roleSync = await syncDiscordTitleRole(message.guild, message.member, result.titleEquipped, color);
+          if (roleSync.success) {
+            text += `\n✨ **Role Discord Otomatis Terpasang:** Role **${result.titleEquipped}** telah diberikan kepadamu & tampil terpisah di daftar member!`;
+          } else {
+            text += `\nℹ️ *Catatan Role Discord:* ${roleSync.reason}`;
+          }
+        }
       } else if (item.id === 'shield') {
         text += `\n🛡️ Perisai Anti-Rampok otomatis aktif melindungi dompetmu!`;
       } else if (item.id === 'jimat') {
@@ -2978,6 +3117,7 @@ case 'daily':
     case 'userinfo': {
       const user = message.mentions.users.first() || message.author;
       const member = message.guild ? await message.guild.members.fetch(user.id).catch(() => null) : null;
+      const ecoUser = economyManager.getUser(user.id);
       const embed = new EmbedBuilder()
         .setColor(0x5865F2)
         .setTitle(`👤 Info Pengguna: ${user.tag}`)
@@ -2985,6 +3125,7 @@ case 'daily':
         .addFields(
           { name: '🆔 User ID', value: user.id, inline: true },
           { name: '🤖 Bot?', value: user.bot ? 'Ya' : 'Bukan', inline: true },
+          { name: '👑 Gelar Kehormatan', value: ecoUser.title ? `**${ecoUser.title}**` : '*Belum ada gelar*', inline: true },
           { name: '📅 Akun Dibuat', value: `<t:${Math.floor(user.createdTimestamp / 1000)}:R>`, inline: true },
           ...(member ? [
             { name: '📥 Bergabung ke Server', value: `<t:${Math.floor(member.joinedTimestamp / 1000)}:R>`, inline: true },
