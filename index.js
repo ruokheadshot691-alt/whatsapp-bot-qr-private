@@ -27,7 +27,7 @@ const {
   generateAiImage
 } = require('./src/tools');
 
-const { makeSticker, stickerToImage } = require('./src/sticker');
+const { makeDiscordSticker, makeSticker, stickerToImage } = require('./src/sticker');
 const { upscaleImage } = require('./src/hd');
 const { makeBratSticker, makeBratVideoSticker } = require('./src/brat');
 const {
@@ -208,7 +208,9 @@ async function handleCommand({ message, command, args, rawText }) {
           {
             name: '🎨 Stiker & Olah Media',
             value: [
-              `\`${prefix}s\` - Ubah gambar (kirim/reply) jadi stiker WebP`,
+              `\`${prefix}s [nama]\` - Buat stiker dan simpan otomatis ke server Discord`,
+              `\`${prefix}liststicker\` - Lihat stiker server dan slot tersisa`,
+              `\`${prefix}delsticker <nama/ID>\` - Hapus stiker custom dari server`,
               `\`${prefix}toimg\` - Ubah stiker kembali jadi gambar foto`,
               `\`${prefix}hd\` - Tingkatkan kualitas foto ke HD (AI Upscaler)`,
               `\`${prefix}brat <teks>\` - Stiker aesthetic teks Brat putih`,
@@ -465,28 +467,139 @@ async function handleCommand({ message, command, args, rawText }) {
 
     // --- STIKER & OLAH MEDIA ---
     case 's':
-    case 'sticker': {
+    case 'sticker':
+    case 'stiker': {
       const media = await getMediaBuffer(message, args);
       if (!media) {
-        const text = `⚠️ Kirim gambar dengan caption \`${prefix}s\` atau reply gambar yang ada.`;
+        const text = `⚠️ Kirim gambar dengan perintah \`${prefix}s [nama_stiker]\` atau reply gambar/stiker yang ada. Contoh: \`${prefix}s kucing_lucu\``;
         await message.reply({ content: text });
         replyTextOutput = text;
         return replyTextOutput;
       }
 
-      try {
-        const stickerBuf = await makeSticker(media.buffer);
-        const attachment = new AttachmentBuilder(stickerBuf, { name: 'sticker.webp' });
-        await message.reply({ files: [attachment] });
-        replyTextOutput = '[Stiker WebP Terkirim]';
-      } catch (err) {
-        const text = `❌ Gagal membuat stiker: ${err.message}`;
+      if (!message.guild) {
+        const text = `⚠️ Untuk menyimpan stiker ke server, jalankan perintah ini di channel server Discord.`;
         await message.reply({ content: text });
+        replyTextOutput = text;
+        return replyTextOutput;
+      }
+
+      const botMember = message.guild.members.me || await message.guild.members.fetchMe().catch(() => null);
+      const canManageStickers = botMember && botMember.permissions.has(PermissionsBitField.Flags.ManageEmojisAndStickers);
+      if (!canManageStickers) {
+        const text = `❌ Bot perlu izin **Manage Expressions** (Manage Emojis and Stickers) di server ini untuk membuat stiker.`;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        return replyTextOutput;
+      }
+
+      let maxStickers = 5;
+      if (message.guild.premiumTier === 1) maxStickers = 15;
+      else if (message.guild.premiumTier === 2) maxStickers = 30;
+      else if (message.guild.premiumTier >= 3) maxStickers = 60;
+
+      const currentStickers = await message.guild.stickers.fetch().catch(() => message.guild.stickers.cache);
+      if (currentStickers.size >= maxStickers) {
+        const text = `⚠️ Slot stiker server penuh (${currentStickers.size}/${maxStickers}). Hapus stiker lama dengan \`${prefix}delsticker <nama atau ID>\` atau kosongkan slot terlebih dahulu.`;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        return replyTextOutput;
+      }
+
+      const rawName = args.join(' ').trim() || `stiker-${message.author.username}`;
+      let stickerName = rawName.replace(/[^a-zA-Z0-9_ -]/g, '').trim().slice(0, 30);
+      if (stickerName.length < 2) stickerName = `stiker-${message.author.id.slice(-8)}`;
+      const tags = stickerName.toLowerCase().replace(/[ -]+/g, '_').slice(0, 30) || 'sticker';
+      const loading = await message.reply({ content: '⏳ Mengubah gambar ke format stiker Discord dan menyimpannya ke server…' });
+
+      try {
+        const pngBuffer = await makeDiscordSticker(media.buffer);
+        const created = await message.guild.stickers.create({
+          file: pngBuffer,
+          name: stickerName,
+          tags,
+          description: `Dibuat oleh ${message.author.username}`.slice(0, 100),
+          reason: `Stiker dibuat lewat perintah ${prefix}s oleh ${message.author.tag}`
+        });
+        const attachment = new AttachmentBuilder(pngBuffer, { name: `${stickerName}.png` });
+        await loading.edit({
+          content: `✅ Stiker **${created.name}** berhasil ditambahkan ke server **${message.guild.name}**. Stiker sekarang tersedia di pemilih stiker server.`,
+          files: [attachment]
+        });
+        replyTextOutput = `[Stiker server dibuat: ${created.name}]`;
+      } catch (err) {
+        let reason = err.message || 'Kesalahan tidak diketahui';
+        if (err.code === 30039) reason = 'slot stiker server sudah penuh';
+        if (err.code === 50013) reason = 'bot tidak punya izin Manage Expressions';
+        if (err.code === 50035) reason = 'Discord menolak format/nama stiker; coba gambar PNG/JPG dan nama lain';
+        const text = `❌ Tidak berhasil menyimpan stiker ke server: ${reason}`;
+        await loading.edit({ content: text }).catch(() => message.reply({ content: text }));
         replyTextOutput = text;
       }
       break;
     }
 
+    case 'liststicker':
+    case 'stickers':
+    case 'daftarstiker': {
+      if (!message.guild) {
+        const text = '⚠️ Perintah ini hanya bisa digunakan di server.';
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        return replyTextOutput;
+      }
+      const stickers = await message.guild.stickers.fetch().catch(() => message.guild.stickers.cache);
+      const maxStickers = message.guild.premiumTier >= 3 ? 60 : message.guild.premiumTier === 2 ? 30 : message.guild.premiumTier === 1 ? 15 : 5;
+      const list = stickers.map(sticker => `• **${sticker.name}** (ID: \`${sticker.id}\`, tag: \`${sticker.tags}\`)`).join('\n') || 'Belum ada stiker custom.';
+      const embed = new EmbedBuilder().setColor(config.embedColor || 0x5865F2).setTitle(`Stiker server: ${message.guild.name}`).setDescription(`Slot terpakai: ${stickers.size}/${maxStickers}\n\n${list}`);
+      await message.reply({ embeds: [embed] });
+      replyTextOutput = `[Daftar stiker server: ${stickers.size}/${maxStickers}]`;
+      break;
+    }
+
+    case 'delsticker':
+    case 'removesticker':
+    case 'hapusstiker': {
+      if (!message.guild) {
+        const text = '⚠️ Perintah ini hanya bisa digunakan di server.';
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        return replyTextOutput;
+      }
+      if (!message.member.permissions.has(PermissionsBitField.Flags.ManageEmojisAndStickers)) {
+        const text = '❌ Kamu perlu izin **Manage Expressions** untuk menghapus stiker server.';
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        return replyTextOutput;
+      }
+      const query = args.join(' ').trim();
+      if (!query) {
+        const text = `⚠️ Pakai \`${prefix}delsticker <nama atau ID>\`.`;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        return replyTextOutput;
+      }
+      const stickers = await message.guild.stickers.fetch().catch(() => message.guild.stickers.cache);
+      const target = stickers.find(sticker => sticker.id === query || sticker.name.toLowerCase() === query.toLowerCase());
+      if (!target) {
+        const text = `❌ Stiker \`${query}\` tidak ditemukan. Lihat dengan \`${prefix}liststicker\`.`;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        return replyTextOutput;
+      }
+      try {
+        const name = target.name;
+        await target.delete(`Dihapus oleh ${message.author.tag}`);
+        const text = `🗑️ Stiker **${name}** dihapus dari server.`;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+      } catch (err) {
+        const text = `❌ Gagal menghapus stiker: ${err.message}`;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+      }
+      break;
+    }
     case 'toimg': {
       const media = await getMediaBuffer(message, args);
       if (!media) {
