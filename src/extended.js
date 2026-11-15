@@ -768,24 +768,61 @@ async function getInstagramMedia(url) {
 
   const html = result.data;
   const candidates = [];
-  const linkRegex = /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  const linkRegex = /<a\b([^>]*)href=["']([^"']+)["']([^>]*)>([\s\S]*?)<\/a>/gi;
   let match;
   while ((match = linkRegex.exec(html))) {
-    const rawHref = igDecodeHtml(match[1]);
-    const text = igStripTags(match[2]);
+    const preAttr = match[1] || '';
+    const rawHref = igDecodeHtml(match[2]);
+    const postAttr = match[3] || '';
+    const text = igStripTags(match[4]);
+    const allAttr = `${preAttr} ${postAttr} ${text}`.toLowerCase();
+
     if (!/^https?:\/\//i.test(rawHref)) continue;
     if (!/(download|dl|cdn|instagram|fbcdn|snapvideo|i-1-cdn)/i.test(rawHref + text)) continue;
-    const type = igInferMediaType(rawHref, text);
-    candidates.push({ url: rawHref, type, text });
+
+    // Deteksi apakah tombol ini hanya download thumbnail / cover video
+    const isThumbnail = /thumb|thumbnail|dl-thumb/i.test(allAttr);
+    const isExplicitVideo = /video|mp4/i.test(allAttr);
+    let type = igInferMediaType(rawHref, text);
+    if (isExplicitVideo) type = 'video';
+    if (isThumbnail) type = 'photo';
+
+    candidates.push({ 
+      url: rawHref, 
+      type, 
+      text, 
+      isThumbnail 
+    });
   }
 
   const seen = new Set();
-  const mediaList = [];
+  const uniqueCandidates = [];
   for (const item of candidates) {
     if (!seen.has(item.url)) {
       seen.add(item.url);
-      mediaList.push(item);
+      uniqueCandidates.push(item);
     }
+  }
+
+  // Pisahkan video asli, foto asli, dan thumbnail
+  const videos = uniqueCandidates.filter(c => c.type === 'video' && !c.isThumbnail);
+  const photos = uniqueCandidates.filter(c => c.type === 'photo' && !c.isThumbnail);
+  const thumbs = uniqueCandidates.filter(c => c.isThumbnail);
+
+  let mediaList = [];
+  if (videos.length > 0) {
+    // Utamakan video asli
+    mediaList = [...videos];
+    // Jika ada foto non-thumbnail (misal postingan carousel campuran foto + video)
+    if (photos.length > 0) {
+      mediaList = mediaList.concat(photos);
+    }
+  } else if (photos.length > 0) {
+    mediaList = photos;
+  } else if (thumbs.length > 0) {
+    mediaList = thumbs;
+  } else {
+    mediaList = uniqueCandidates;
   }
 
   if (!mediaList.length) {
