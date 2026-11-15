@@ -188,6 +188,120 @@ function formatUptime(seconds) {
   return `${d > 0 ? `${d}h ` : ''}${h > 0 ? `${h}j ` : ''}${m}m ${s}d`;
 }
 
+// Helper: Parse custom profile (Display Name, Username, Avatar, Teks) untuk .tweet dan .quote
+async function parseCustomProfileInput({ message, args, rawArgsText, refMsg }) {
+  let customName = null;
+  let customUsername = null;
+  let customAvatarUrl = null;
+  let text = '';
+  let isCustom = false;
+
+  const flagRegex = /(?:--|-)(name|nama|n|user|username|u|avatar|pfp|foto|pic)\b/i;
+  if (flagRegex.test(rawArgsText)) {
+    let remaining = rawArgsText;
+    const nameMatch = remaining.match(/(?:--|-)(?:name|nama|n)\s+("[^"]+"|\S+)/i);
+    if (nameMatch) {
+      customName = nameMatch[1].replace(/^"|"$/g, '').trim();
+      remaining = remaining.replace(nameMatch[0], ' ');
+    }
+    const userMatch = remaining.match(/(?:--|-)(?:username|user|u)\s+("[^"]+"|\S+)/i);
+    if (userMatch) {
+      customUsername = userMatch[1].replace(/^"|"$/g, '').replace(/^@/, '').trim();
+      remaining = remaining.replace(userMatch[0], ' ');
+    }
+    const avatarMatch = remaining.match(/(?:--|-)(?:avatar|pfp|foto|pic)\s+("[^"]+"|\S+)/i);
+    if (avatarMatch) {
+      customAvatarUrl = avatarMatch[1].replace(/^"|"$/g, '').trim();
+      remaining = remaining.replace(avatarMatch[0], ' ');
+    }
+    text = remaining.trim();
+    isCustom = !!(customName || customUsername || customAvatarUrl);
+  } else if (rawArgsText.includes('|')) {
+    const parts = rawArgsText.split('|').map(p => p.trim());
+    if (parts.length >= 3) {
+      customName = parts[0];
+      customUsername = parts[1].replace(/^@/, '');
+      if (parts.length >= 4 && /^https?:\/\//i.test(parts[2])) {
+        customAvatarUrl = parts[2];
+        text = parts.slice(3).join('|').trim();
+      } else {
+        text = parts.slice(2).join('|').trim();
+      }
+      isCustom = true;
+    } else if (parts.length === 2) {
+      customName = parts[0];
+      customUsername = parts[0].toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 15) || 'user';
+      text = parts[1];
+      isCustom = true;
+    }
+  }
+
+  let targetUser = message ? message.author : null;
+  if (!isCustom) {
+    if (message && message.mentions && message.mentions.users && message.mentions.users.size > 0) {
+      targetUser = message.mentions.users.first();
+      const textParts = args.filter(a => !a.startsWith('<@'));
+      text = textParts.join(' ');
+      if (!text && refMsg && refMsg.content) {
+        text = refMsg.content;
+      }
+    } else if (refMsg) {
+      targetUser = refMsg.author;
+      text = args.length > 0 ? args.join(' ') : (refMsg.content || '');
+    } else if (message) {
+      targetUser = message.author;
+      text = args.join(' ');
+    }
+  }
+
+  let avatarBuffer = null;
+  if (customAvatarUrl && /^https?:\/\//i.test(customAvatarUrl)) {
+    try {
+      const res = await axios.get(customAvatarUrl, { responseType: 'arraybuffer', timeout: 8000 });
+      if (res.status === 200 && res.data) avatarBuffer = Buffer.from(res.data);
+    } catch (_) {}
+  }
+
+  if (!avatarBuffer && message && message.attachments && message.attachments.size > 0) {
+    const att = message.attachments.first();
+    if (!att.contentType || att.contentType.startsWith('image/') || /\.(png|jpe?g|webp|gif)$/i.test(att.url)) {
+      try {
+        const res = await axios.get(att.url, { responseType: 'arraybuffer', timeout: 8000 });
+        if (res.status === 200 && res.data) avatarBuffer = Buffer.from(res.data);
+      } catch (_) {}
+    }
+  }
+
+  if (!avatarBuffer && refMsg && refMsg.attachments && refMsg.attachments.size > 0) {
+    const att = refMsg.attachments.first();
+    if (!att.contentType || att.contentType.startsWith('image/') || /\.(png|jpe?g|webp|gif)$/i.test(att.url)) {
+      try {
+        const res = await axios.get(att.url, { responseType: 'arraybuffer', timeout: 8000 });
+        if (res.status === 200 && res.data) avatarBuffer = Buffer.from(res.data);
+      } catch (_) {}
+    }
+  }
+
+  if (!avatarBuffer && !isCustom && targetUser && typeof targetUser.displayAvatarURL === 'function') {
+    try {
+      const avUrl = targetUser.displayAvatarURL({ extension: 'png', size: 256, forceStatic: true });
+      const res = await axios.get(avUrl, { responseType: 'arraybuffer', timeout: 8000 });
+      if (res.status === 200 && res.data) avatarBuffer = Buffer.from(res.data);
+    } catch (_) {}
+  }
+
+  const finalName = customName || (targetUser ? (targetUser.displayName || targetUser.username || 'User') : 'User');
+  const finalUsername = customUsername || (targetUser ? (targetUser.username || 'user') : 'user');
+
+  return {
+    isCustom,
+    name: finalName,
+    username: finalUsername,
+    text: text.trim(),
+    avatarBuffer
+  };
+}
+
 // Core Command Handler: Dapat dipanggil dari Discord chat maupun console CLI
 async function handleCommand({ message, command, args, rawText }) {
   const prefix = config.prefix || '.';
@@ -249,6 +363,13 @@ async function handleCommand({ message, command, args, rawText }) {
               `\`${prefix}tomp3\` - Reply video untuk diekstrak jadi audio MP3`,
               `\`${prefix}transkrip\` - Reply pesan suara/audio untuk diubah ke teks`,
               `\`${prefix}bass\`, \`${prefix}slow\`, \`${prefix}robot\`, \`${prefix}chipmunk\` - Efek audio`
+            ].join('\n')
+          },
+          {
+            name: '🎭 Fake Tweet & Aesthetic Quote',
+            value: [
+              `\`${prefix}tweet <teks / custom>\` - Postingan X/Twitter (custom nama, @user, foto profil)`,
+              `\`${prefix}quote <teks / custom>\` - Poster kutipan kata bijak aesthetic dark neon`
             ].join('\n')
           },
           {
@@ -722,62 +843,36 @@ async function handleCommand({ message, command, args, rawText }) {
     case 'faketweet':
     case 'twit':
     case 'x': {
-      let targetUser = message.author;
-      let text = '';
       let refMsg = null;
-
       if (message.reference && message.reference.messageId) {
         try {
           refMsg = await message.channel.messages.fetch(message.reference.messageId);
         } catch (_) {}
       }
 
-      if (message.mentions && message.mentions.users && message.mentions.users.size > 0) {
-        targetUser = message.mentions.users.first();
-        const textParts = args.filter(a => !a.startsWith('<@'));
-        text = textParts.join(' ');
-        if (!text && refMsg && refMsg.content) {
-          text = refMsg.content;
-        }
-      } else if (refMsg) {
-        targetUser = refMsg.author;
-        if (args.length > 0) {
-          text = args.join(' ');
-        } else {
-          text = refMsg.content || '';
-        }
-      } else {
-        targetUser = message.author;
-        text = args.join(' ');
-      }
+      const rawArgsText = args.join(' ');
+      const parsed = await parseCustomProfileInput({ message, args, rawArgsText, refMsg });
 
-      if (!text.trim()) {
-        const helpText = `⚠️ Masukkan teks tweet atau reply chat orang lain!\n` +
-          `• Contoh sendiri: ``${prefix}tweet Halo dunia Discord``\n` +
-          `• Contoh mention: ``${prefix}tweet @user Teks tweet hoax``\n` +
-          `• Contoh reply: Reply pesan teman lalu ketik ``${prefix}tweet```;
+      if (!parsed.text) {
+        const helpText = `🐦 **Format Fake Tweet (${prefix}tweet / ${prefix}x)**:\n` +
+          `• **Custom Penuh (Pipe):** \`${prefix}tweet Display Name | @username | Teks tweet\`\n` +
+          `• **Custom Foto (Link):** \`${prefix}tweet Display Name | @username | Link_Foto | Teks\`\n` +
+          `• **Custom Foto (Upload):** Lampirkan foto lalu ketik \`${prefix}tweet Display Name | @username | Teks\`\n` +
+          `• **Custom Flag:** \`${prefix}tweet -name "Elon Musk" -user elonmusk Teks tweet\`\n` +
+          `• **Mention Teman:** \`${prefix}tweet @user Teks tweet\`\n` +
+          `• **Reply Pesan:** Reply chat teman lalu ketik \`${prefix}tweet\`\n` +
+          `• **Tweet Sendiri:** \`${prefix}tweet Teks tweet kamu\``;
         await message.reply({ content: helpText });
         replyTextOutput = helpText;
         return replyTextOutput;
       }
 
       try {
-        let avatarBuffer = null;
-        if (targetUser && targetUser.displayAvatarURL) {
-          try {
-            const avUrl = targetUser.displayAvatarURL({ extension: 'png', size: 256, forceStatic: true });
-            const res = await axios.get(avUrl, { responseType: 'arraybuffer', timeout: 8000 });
-            if (res.status === 200 && res.data) {
-              avatarBuffer = Buffer.from(res.data);
-            }
-          } catch (_) {}
-        }
-
         const tweetBuf = await makeFakeTweet({
-          name: targetUser ? (targetUser.displayName || targetUser.username || 'User') : 'User',
-          username: targetUser ? (targetUser.username || 'user') : 'user',
-          text: text.trim(),
-          avatarBuffer
+          name: parsed.name,
+          username: parsed.username,
+          text: parsed.text,
+          avatarBuffer: parsed.avatarBuffer
         });
 
         const attachment = new AttachmentBuilder(tweetBuf, { name: 'tweet.png' });
@@ -796,63 +891,35 @@ async function handleCommand({ message, command, args, rawText }) {
     case 'kata':
     case 'katabijak':
     case 'q': {
-      let targetUser = message.author;
-      let text = '';
       let refMsg = null;
-
       if (message.reference && message.reference.messageId) {
         try {
           refMsg = await message.channel.messages.fetch(message.reference.messageId);
         } catch (_) {}
       }
 
-      if (message.mentions && message.mentions.users && message.mentions.users.size > 0) {
-        targetUser = message.mentions.users.first();
-        const textParts = args.filter(a => !a.startsWith('<@'));
-        text = textParts.join(' ');
-        if (!text && refMsg && refMsg.content) {
-          text = refMsg.content;
-        }
-      } else if (refMsg) {
-        targetUser = refMsg.author;
-        if (args.length > 0) {
-          text = args.join(' ');
-        } else {
-          text = refMsg.content || '';
-        }
-      } else {
-        targetUser = message.author;
-        text = args.join(' ');
-      }
+      const rawArgsText = args.join(' ');
+      const parsed = await parseCustomProfileInput({ message, args, rawArgsText, refMsg });
 
-      if (!text.trim()) {
-        const helpText = `⚠️ Masukkan kutipan kata bijak atau reply chat orang lain!\n` +
-          `• Contoh sendiri: ``${prefix}quote Hidup ini indah``\n` +
-          `• Contoh mention: ``${prefix}quote @user Kata mutiara konyol``\n` +
-          `• Contoh reply: Reply chat teman lalu ketik ``${prefix}quote```;
+      if (!parsed.text) {
+        const helpText = `📜 **Format Aesthetic Quote (${prefix}quote / ${prefix}q)**:\n` +
+          `• **Custom Penuh:** \`${prefix}quote Nama Tokoh | @username | Kata mutiara\`\n` +
+          `• **Custom Foto:** Lampirkan foto lalu ketik \`${prefix}quote Tokoh | @username | Kutipan\`\n` +
+          `• **Mention Teman:** \`${prefix}quote @user Kata mutiara konyol\`\n` +
+          `• **Reply Pesan:** Reply chat teman lalu ketik \`${prefix}quote\`\n` +
+          `• **Quote Sendiri:** \`${prefix}quote Hidup ini indah\``;
         await message.reply({ content: helpText });
         replyTextOutput = helpText;
         return replyTextOutput;
       }
 
       try {
-        let avatarBuffer = null;
-        if (targetUser && targetUser.displayAvatarURL) {
-          try {
-            const avUrl = targetUser.displayAvatarURL({ extension: 'png', size: 256, forceStatic: true });
-            const res = await axios.get(avUrl, { responseType: 'arraybuffer', timeout: 8000 });
-            if (res.status === 200 && res.data) {
-              avatarBuffer = Buffer.from(res.data);
-            }
-          } catch (_) {}
-        }
-
         const now = new Date();
         const quoteBuf = await makeAestheticQuote({
-          name: targetUser ? (targetUser.displayName || targetUser.username || 'Seseorang') : 'Seseorang',
-          username: targetUser ? (targetUser.username || 'user') : 'user',
-          text: text.trim(),
-          avatarBuffer,
+          name: parsed.name,
+          username: parsed.username,
+          text: parsed.text,
+          avatarBuffer: parsed.avatarBuffer,
           year: String(now.getFullYear())
         });
 
