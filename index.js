@@ -308,6 +308,66 @@ async function parseCustomProfileInput({ message, args, rawArgsText, refMsg }) {
   };
 }
 
+// Format label gelar yang muncul langsung di nickname server
+function formatTitleBadge(titleText) {
+  if (!titleText) return '';
+  const badges = {
+    '💎 Konglomerat Server': 'Konglomerat💎',
+    '👑 Sultan Server': 'Sultan👑',
+    '🎲 Raja Judi': 'Raja Judi🎲',
+    '🔥 Lord Tuff': 'Lord Tuff🔥'
+  };
+  return badges[titleText] || String(titleText).trim().replace(/\s+server$/i, '').trim();
+}
+
+function getNicknameBase(member) {
+  const current = (member.nickname || member.user.displayName || member.user.username || 'User').trim();
+  const bracketed = current.match(/^\[(.*?)\](?:\s+.*)?$/u);
+  if (bracketed && bracketed[1]) return bracketed[1].trim();
+  return current.replace(/\s+(?:Konglomerat💎|Sultan👑|Raja Judi🎲|Lord Tuff🔥)$/u, '').trim();
+}
+
+function buildTitleNickname(member, titleText) {
+  const badge = formatTitleBadge(titleText);
+  if (!badge) return null;
+  const prefix = '[';
+  const suffix = `] ${badge}`;
+  const available = Math.max(1, 32 - Array.from(prefix + suffix).length);
+  const base = Array.from(getNicknameBase(member)).slice(0, available).join('').trim();
+  return `${prefix}${base || 'User'}${suffix}`;
+}
+
+async function syncDiscordTitleNickname(guild, member, titleText) {
+  const nickname = buildTitleNickname(member, titleText);
+  if (!guild || !member || !nickname) return { success: false, reason: 'Tidak bisa menentukan nickname gelar.' };
+  if (guild.ownerId === member.id) {
+    return { success: false, reason: `Discord tidak mengizinkan bot mengubah nickname pemilik server. Pasang manual: \`${nickname}\`.` };
+  }
+  const botMember = guild.members.me || await guild.members.fetchMe().catch(() => null);
+  if (!botMember || !botMember.permissions.has(PermissionsBitField.Flags.ManageNicknames)) {
+    return { success: false, reason: 'Bot perlu izin Manage Nicknames (Kelola Nama Panggilan).' };
+  }
+  if (botMember.roles.highest.position <= member.roles.highest.position) {
+    return { success: false, reason: 'Role bot harus diposisikan di atas role tertinggi kamu.' };
+  }
+  try {
+    await member.setNickname(nickname, `Gelar ekonomi: ${formatTitleBadge(titleText)}`);
+    return { success: true, nickname };
+  } catch (err) {
+    return { success: false, reason: `Gagal mengubah nickname: ${err.message}` };
+  }
+}
+
+async function resetDiscordTitleNickname(guild, member) {
+  if (!guild || !member || guild.ownerId === member.id) return;
+  const botMember = guild.members.me || await guild.members.fetchMe().catch(() => null);
+  if (!botMember || !botMember.permissions.has(PermissionsBitField.Flags.ManageNicknames) || botMember.roles.highest.position <= member.roles.highest.position) return;
+  const base = getNicknameBase(member);
+  try {
+    await member.setNickname(base === member.user.username ? null : base.substring(0, 32), 'Gelar ekonomi dilepas');
+  } catch (_) {}
+}
+
 // Sinkronisasi Role Discord untuk Gelar Toko Koin
 async function syncDiscordTitleRole(guild, member, titleText, colorHex) {
   if (!guild || !member) return { success: false, reason: 'Bukan di dalam server Discord.' };
@@ -1758,6 +1818,12 @@ case 'daily':
         } else {
           text += `\nℹ️ *Catatan Role Discord:* ${roleSync.reason}`;
         }
+        const nicknameSync = await syncDiscordTitleNickname(message.guild, message.member, result.title);
+        if (nicknameSync.success) {
+          text += `\n🏷️ Nickname server kini **${nicknameSync.nickname}**.`;
+        } else {
+          text += `\nℹ️ *Catatan nickname:* ${nicknameSync.reason}`;
+        }
       }
       await message.reply({ content: text });
       replyTextOutput = text;
@@ -1787,6 +1853,7 @@ case 'daily':
       };
       const color = titleColors[account.title] || 0xEB459E;
       const roleSync = await syncDiscordTitleRole(message.guild, message.member, account.title, color);
+      const nicknameSync = await syncDiscordTitleNickname(message.guild, message.member, account.title);
       if (roleSync.success) {
         const text = `🎉 **Role Gelar Berhasil Disinkronkan!** Role **${account.title}** telah dipasangkan ke akunmu dan tampil terpisah di daftar member!`;
         await message.reply({ content: text });
@@ -1796,6 +1863,11 @@ case 'daily':
         await message.reply({ content: text });
         replyTextOutput = text;
       }
+      const nicknameText = nicknameSync.success
+        ? `🏷️ Nickname server sekarang **${nicknameSync.nickname}**.`
+        : `ℹ️ Nickname belum berubah: ${nicknameSync.reason}`;
+      await message.channel.send(nicknameText);
+      replyTextOutput += `\n${nicknameText}`;
       break;
     }
 
@@ -1813,8 +1885,9 @@ case 'daily':
       economyManager.setUserTitle(userId, null);
       if (message.guild && message.member) {
         await removeDiscordTitleRole(message.guild, message.member, oldTitle);
+        await resetDiscordTitleNickname(message.guild, message.member);
       }
-      const text = `✅ Gelar **${oldTitle}** telah dicopot dari profilmu dan role Discord terkait telah dilepas.`;
+      const text = `✅ Gelar **${oldTitle}** telah dicopot dari profilmu, role dilepas, dan nickname server dikembalikan.`;
       await message.reply({ content: text });
       replyTextOutput = text;
       break;
@@ -1965,6 +2038,12 @@ case 'daily':
             text += `\n✨ **Role Discord Otomatis Terpasang:** Role **${result.titleEquipped}** telah diberikan kepadamu & tampil terpisah di daftar member!`;
           } else {
             text += `\nℹ️ *Catatan Role Discord:* ${roleSync.reason}`;
+          }
+          const nicknameSync = await syncDiscordTitleNickname(message.guild, message.member, result.titleEquipped);
+          if (nicknameSync.success) {
+            text += `\n🏷️ Nickname server kini **${nicknameSync.nickname}**.`;
+          } else {
+            text += `\nℹ️ *Catatan nickname:* ${nicknameSync.reason}`;
           }
         }
       } else if (item.id === 'shield') {
