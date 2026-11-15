@@ -855,11 +855,20 @@ async function makeFakeTweet({
   username = 'user',
   text = '',
   avatarBuffer = null,
+  avatarUrl = null,
+  verified = true,
   retweets = null,
   quotes = null,
   likes = null,
   bookmarks = null
 }) {
+  if (!avatarBuffer && avatarUrl) {
+    try {
+      const axios = require('axios');
+      const res = await axios.get(avatarUrl, { responseType: 'arraybuffer', timeout: 8000 });
+      if (res.status === 200 && res.data) avatarBuffer = Buffer.from(res.data);
+    } catch (_) {}
+  }
   const cleanName = String(name || 'User').trim().slice(0, 30);
   const cleanUsername = String(username || 'user').trim().replace(/^@/, '').slice(0, 25);
   const lines = wrapText(text, 44, 10);
@@ -939,10 +948,11 @@ async function makeFakeTweet({
 
     <text x="${nameX}" y="${nameY}" fill="#e7e9ea" font-size="20" font-weight="700" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">${escapeXml(cleanName)}</text>
 
+    ${verified !== false ? `
     <!-- Twitter Verified Badge SVG -->
-    <g transform="translate(${nameX + Math.min(230, cleanName.length * 11 + 6)}, ${nameY - 17})">
+    <g transform="translate(${nameX + Math.min(cardWidth - padding - 80 - nameX, Math.round(cleanName.length * 11.5 + 8))}, ${nameY - 17})">
       <path fill="#1d9bf0" d="M19.39 10.22c.31-.93.13-1.93-.54-2.61s-1.68-.85-2.61-.54c-.44-.88-1.28-1.46-2.24-1.46s-1.79.59-2.23 1.46c-.94-.31-1.94-.14-2.62.54s-.84 1.68-.53 2.61c-.88.44-1.47 1.28-1.47 2.24s.59 1.79 1.47 2.23c-.31.94-.14 1.94.53 2.62s1.68.84 2.62.53c.44.88 1.28 1.47 2.23 1.47s1.8-.59 2.24-1.47c.93.31 1.93.13 2.61-.53s.85-1.68.54-2.62c.88-.44 1.46-1.28 1.46-2.23s-.58-1.8-1.46-2.24zm-7.81 5.34l-2.9-2.9 1.21-1.21 1.69 1.69 4.12-4.12 1.21 1.21-5.33 5.33z"/>
-    </g>
+    </g>` : ''}
 
     <text x="${nameX}" y="${handleY}" fill="#71767b" font-size="16" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">@${escapeXml(cleanUsername)}</text>
 
@@ -1008,8 +1018,16 @@ async function makeAestheticQuote({
   username = 'user',
   text = 'Kutipan kata bijak...',
   avatarBuffer = null,
+  avatarUrl = null,
   year = '2026'
 }) {
+  if (!avatarBuffer && avatarUrl) {
+    try {
+      const axios = require('axios');
+      const res = await axios.get(avatarUrl, { responseType: 'arraybuffer', timeout: 8000 });
+      if (res.status === 200 && res.data) avatarBuffer = Buffer.from(res.data);
+    } catch (_) {}
+  }
   const cleanName = String(name || 'Seseorang').trim().slice(0, 28);
   const cleanUsername = String(username || 'user').trim().replace(/^@/, '').slice(0, 24);
   const lines = wrapText(text, 34, 7);
