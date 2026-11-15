@@ -32,6 +32,8 @@ const { makeDiscordSticker, makeSticker, stickerToImage } = require('./src/stick
 const { upscaleImage } = require('./src/hd');
 const { makeBratSticker, makeBratVideoSticker } = require('./src/brat');
 const {
+  makeFakeTweet,
+  makeAestheticQuote,
   makeQcSticker,
   makeSmemeSticker,
   makeTtpSticker,
@@ -711,6 +713,155 @@ async function handleCommand({ message, command, args, rawText }) {
         replyTextOutput = '[Quote Chat Sticker Terkirim]';
       } catch (err) {
         await message.reply({ content: `❌ Gagal membuat QC: ${err.message}` });
+      }
+      break;
+    }
+
+    // --- FAKE TWEET & MEME CANVAS ---
+    case 'tweet':
+    case 'faketweet':
+    case 'twit':
+    case 'x': {
+      let targetUser = message.author;
+      let text = '';
+      let refMsg = null;
+
+      if (message.reference && message.reference.messageId) {
+        try {
+          refMsg = await message.channel.messages.fetch(message.reference.messageId);
+        } catch (_) {}
+      }
+
+      if (message.mentions && message.mentions.users && message.mentions.users.size > 0) {
+        targetUser = message.mentions.users.first();
+        const textParts = args.filter(a => !a.startsWith('<@'));
+        text = textParts.join(' ');
+        if (!text && refMsg && refMsg.content) {
+          text = refMsg.content;
+        }
+      } else if (refMsg) {
+        targetUser = refMsg.author;
+        if (args.length > 0) {
+          text = args.join(' ');
+        } else {
+          text = refMsg.content || '';
+        }
+      } else {
+        targetUser = message.author;
+        text = args.join(' ');
+      }
+
+      if (!text.trim()) {
+        const helpText = `⚠️ Masukkan teks tweet atau reply chat orang lain!\n` +
+          `• Contoh sendiri: ``${prefix}tweet Halo dunia Discord``\n` +
+          `• Contoh mention: ``${prefix}tweet @user Teks tweet hoax``\n` +
+          `• Contoh reply: Reply pesan teman lalu ketik ``${prefix}tweet```;
+        await message.reply({ content: helpText });
+        replyTextOutput = helpText;
+        return replyTextOutput;
+      }
+
+      try {
+        let avatarBuffer = null;
+        if (targetUser && targetUser.displayAvatarURL) {
+          try {
+            const avUrl = targetUser.displayAvatarURL({ extension: 'png', size: 256, forceStatic: true });
+            const res = await axios.get(avUrl, { responseType: 'arraybuffer', timeout: 8000 });
+            if (res.status === 200 && res.data) {
+              avatarBuffer = Buffer.from(res.data);
+            }
+          } catch (_) {}
+        }
+
+        const tweetBuf = await makeFakeTweet({
+          name: targetUser ? (targetUser.displayName || targetUser.username || 'User') : 'User',
+          username: targetUser ? (targetUser.username || 'user') : 'user',
+          text: text.trim(),
+          avatarBuffer
+        });
+
+        const attachment = new AttachmentBuilder(tweetBuf, { name: 'tweet.png' });
+        await message.reply({ files: [attachment] });
+        replyTextOutput = '[Fake Tweet Terkirim]';
+      } catch (err) {
+        console.error('[TWEET] Error:', err);
+        await message.reply({ content: `❌ Gagal membuat fake tweet: ${err.message}` });
+      }
+      break;
+    }
+
+    // --- AESTHETIC DARK QUOTE GENERATOR ---
+    case 'quote':
+    case 'quotes':
+    case 'kata':
+    case 'katabijak':
+    case 'q': {
+      let targetUser = message.author;
+      let text = '';
+      let refMsg = null;
+
+      if (message.reference && message.reference.messageId) {
+        try {
+          refMsg = await message.channel.messages.fetch(message.reference.messageId);
+        } catch (_) {}
+      }
+
+      if (message.mentions && message.mentions.users && message.mentions.users.size > 0) {
+        targetUser = message.mentions.users.first();
+        const textParts = args.filter(a => !a.startsWith('<@'));
+        text = textParts.join(' ');
+        if (!text && refMsg && refMsg.content) {
+          text = refMsg.content;
+        }
+      } else if (refMsg) {
+        targetUser = refMsg.author;
+        if (args.length > 0) {
+          text = args.join(' ');
+        } else {
+          text = refMsg.content || '';
+        }
+      } else {
+        targetUser = message.author;
+        text = args.join(' ');
+      }
+
+      if (!text.trim()) {
+        const helpText = `⚠️ Masukkan kutipan kata bijak atau reply chat orang lain!\n` +
+          `• Contoh sendiri: ``${prefix}quote Hidup ini indah``\n` +
+          `• Contoh mention: ``${prefix}quote @user Kata mutiara konyol``\n` +
+          `• Contoh reply: Reply chat teman lalu ketik ``${prefix}quote```;
+        await message.reply({ content: helpText });
+        replyTextOutput = helpText;
+        return replyTextOutput;
+      }
+
+      try {
+        let avatarBuffer = null;
+        if (targetUser && targetUser.displayAvatarURL) {
+          try {
+            const avUrl = targetUser.displayAvatarURL({ extension: 'png', size: 256, forceStatic: true });
+            const res = await axios.get(avUrl, { responseType: 'arraybuffer', timeout: 8000 });
+            if (res.status === 200 && res.data) {
+              avatarBuffer = Buffer.from(res.data);
+            }
+          } catch (_) {}
+        }
+
+        const now = new Date();
+        const quoteBuf = await makeAestheticQuote({
+          name: targetUser ? (targetUser.displayName || targetUser.username || 'Seseorang') : 'Seseorang',
+          username: targetUser ? (targetUser.username || 'user') : 'user',
+          text: text.trim(),
+          avatarBuffer,
+          year: String(now.getFullYear())
+        });
+
+        const attachment = new AttachmentBuilder(quoteBuf, { name: 'quote.png' });
+        await message.reply({ files: [attachment] });
+        replyTextOutput = '[Aesthetic Quote Terkirim]';
+      } catch (err) {
+        console.error('[QUOTE] Error:', err);
+        await message.reply({ content: `❌ Gagal membuat quote: ${err.message}` });
       }
       break;
     }
