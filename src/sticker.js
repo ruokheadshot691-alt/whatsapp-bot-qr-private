@@ -1,15 +1,49 @@
 const sharp = require('sharp');
 
 /**
- * Mengonversi buffer gambar biasa menjadi buffer stiker WebP 512x512
- * Memastikan kompatibilitas penuh dengan spesifikasi stiker WhatsApp
+ * Mengonversi buffer gambar biasa menjadi stiker resmi Discord (PNG 320x320)
+ * Sesuai spesifikasi Discord Guild Sticker:
+ * - Ukuran tepat 320x320 px
+ * - Format PNG (dengan transparansi jika ada)
+ * - Ukuran file maksimal < 512 KB
+ */
+async function makeDiscordSticker(imageBuffer) {
+  try {
+    // 1. Coba konversi dan resize tepat ke 320x320 PNG
+    let pngBuffer = await sharp(imageBuffer)
+      .resize(320, 320, {
+        fit: 'contain',
+        background: { r: 0, g: 0, b: 0, alpha: 0 } // transparan
+      })
+      .png({ compressionLevel: 9 })
+      .toBuffer();
+
+    // 2. Jika ukuran file mendekati batas Discord (512 KB), optimasi kompresi palette
+    if (pngBuffer.length > 500 * 1024) {
+      pngBuffer = await sharp(imageBuffer)
+        .resize(320, 320, {
+          fit: 'contain',
+          background: { r: 0, g: 0, b: 0, alpha: 0 }
+        })
+        .png({ palette: true, quality: 80, compressionLevel: 9 })
+        .toBuffer();
+    }
+
+    return pngBuffer;
+  } catch (err) {
+    throw new Error('Gagal memproses gambar ke format stiker Discord (320x320): ' + err.message);
+  }
+}
+
+/**
+ * Mengonversi buffer gambar menjadi buffer stiker WebP 512x512 (kompatibilitas pesan)
  */
 async function makeSticker(imageBuffer) {
   try {
     const webpBuffer = await sharp(imageBuffer)
       .resize(512, 512, {
         fit: 'contain',
-        background: { r: 0, g: 0, b: 0, alpha: 0 } // transparan
+        background: { r: 0, g: 0, b: 0, alpha: 0 }
       })
       .webp({ quality: 80, effort: 4 })
       .toBuffer();
@@ -34,4 +68,4 @@ async function stickerToImage(webpBuffer) {
   }
 }
 
-module.exports = { makeSticker, stickerToImage };
+module.exports = { makeDiscordSticker, makeSticker, stickerToImage };
