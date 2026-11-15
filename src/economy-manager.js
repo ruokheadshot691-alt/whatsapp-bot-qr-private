@@ -107,6 +107,42 @@ function removeWallet(userId, amount) {
   return current[userId];
 }
 
+function addBank(userId, amount) {
+  const data = loadData();
+  if (!data[userId]) getUser(userId);
+  const current = loadData();
+  current[userId].bank = Math.max(0, (current[userId].bank || 0) + Math.floor(Number(amount)));
+  saveData(current);
+  return current[userId];
+}
+
+function removeBank(userId, amount) {
+  const data = loadData();
+  if (!data[userId]) getUser(userId);
+  const current = loadData();
+  current[userId].bank = Math.max(0, (current[userId].bank || 0) - Math.floor(Number(amount)));
+  saveData(current);
+  return current[userId];
+}
+
+function setWallet(userId, amount) {
+  const data = loadData();
+  if (!data[userId]) getUser(userId);
+  const current = loadData();
+  current[userId].wallet = Math.max(0, Math.floor(Number(amount)));
+  saveData(current);
+  return current[userId];
+}
+
+function setBank(userId, amount) {
+  const data = loadData();
+  if (!data[userId]) getUser(userId);
+  const current = loadData();
+  current[userId].bank = Math.max(0, Math.floor(Number(amount)));
+  saveData(current);
+  return current[userId];
+}
+
 function deposit(userId, amountStr) {
   const user = getUser(userId);
   let amount = 0;
@@ -968,6 +1004,10 @@ module.exports = {
   getUser,
   addWallet,
   removeWallet,
+  addBank,
+  removeBank,
+  setWallet,
+  setBank,
   deposit,
   withdraw,
   transfer,
