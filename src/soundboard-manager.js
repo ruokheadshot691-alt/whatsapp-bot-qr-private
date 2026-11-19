@@ -8,12 +8,12 @@ const USER_AGENT = 'DiscordBot (https://github.com/discordjs/discord.js, 14.16.3
 
 /**
  * Konversi dan potong audio menjadi format Soundboard Discord:
- * - Durasi maksimal: 5.2 detik
+ * - Durasi maksimal: 4.8 - 5.0 detik (batas keras Discord adalah 5.20 detik, 4.8 detik mencegah buffer overfill / padding LAME)
  * - Format: MP3 (libmp3lame, 44.1kHz)
  * - Ukuran maksimal: < 512 KB
  */
 function convertAudioToSoundboardBuffer(inputBuffer, options = {}) {
-  const { startSec = 0, durationSec = 5.2 } = options;
+  const { startSec = 0, durationSec = 4.8 } = options;
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soundboard_'));
   const inPath = path.join(tmpDir, 'input.raw');
   const outPath = path.join(tmpDir, 'output.mp3');
@@ -21,18 +21,19 @@ function convertAudioToSoundboardBuffer(inputBuffer, options = {}) {
   try {
     fs.writeFileSync(inPath, inputBuffer);
     
-    // Potong & konversi ke MP3 mono/stereo 128k
+    // Potong & konversi ke MP3 128k
     const ss = Math.max(0, parseFloat(startSec) || 0);
-    const dur = Math.min(5.2, Math.max(0.5, parseFloat(durationSec) || 5.2));
+    const dur = Math.min(4.8, Math.max(0.5, parseFloat(durationSec) || 4.8));
     
-    const cmd = `ffmpeg -y -ss ${ss} -t ${dur} -i "${inPath}" -vn -c:a libmp3lame -b:a 128k -ar 44100 "${outPath}"`;
+    // Gunakan filter atrim dan -t setelah -i agar hasil tepat 4.8 detik tanpa melebihi batas 5.2s Discord
+    const cmd = `ffmpeg -y -ss ${ss} -i "${inPath}" -t ${dur} -af "atrim=0:${dur},asetpts=PTS-STARTPTS" -vn -c:a libmp3lame -b:a 128k -ar 44100 "${outPath}"`;
     execSync(cmd, { stdio: 'pipe' });
 
     let outBuf = fs.readFileSync(outPath);
     
     // Jika ukuran > 500KB (batas Discord 512KB), kompres dengan bitrate lebih hemat
     if (outBuf.length > 500 * 1024) {
-      const fallbackCmd = `ffmpeg -y -ss ${ss} -t ${dur} -i "${inPath}" -vn -c:a libmp3lame -b:a 64k -ar 32000 "${outPath}"`;
+      const fallbackCmd = `ffmpeg -y -ss ${ss} -i "${inPath}" -t ${dur} -af "atrim=0:${dur},asetpts=PTS-STARTPTS" -vn -c:a libmp3lame -b:a 64k -ar 32000 "${outPath}"`;
       execSync(fallbackCmd, { stdio: 'pipe' });
       outBuf = fs.readFileSync(outPath);
     }
