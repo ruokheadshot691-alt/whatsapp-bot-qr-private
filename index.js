@@ -1470,7 +1470,7 @@ async function handleCommand({ message, command, args, rawText }) {
             `• \`${prefix}playsound ketawa\` (putar di Voice Channel)`,
             `• \`${prefix}listsound\` (lihat daftar soundboard server)`
           ].join('\n'))
-          .setFooter({ text: 'Maksimal durasi: 5.2 detik (standar Discord Soundboard)' });
+          .setFooter({ text: 'Maksimal durasi: 5 detik (standar Discord Soundboard)' });
         await message.reply({ embeds: [helpEmbed] });
         break;
       }
@@ -1500,7 +1500,7 @@ async function handleCommand({ message, command, args, rawText }) {
             `Suara **${created.name}** resmi terdaftar di Soundboard server!`,
             '',
             `🎵 **Nama Sound:** \`${created.name}\``,
-            `⏱️ **Durasi:** Maks 5.2 detik`,
+            `⏱️ **Durasi:** Maks 5 detik`,
             `🔊 **Emoji:** ${created.emoji_name || '🔊'}`,
             `🆔 **Sound ID:** \`${created.sound_id}\``,
             '',
