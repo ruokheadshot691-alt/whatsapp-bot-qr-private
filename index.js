@@ -32,6 +32,7 @@ const afkManager = require("./src/afk-manager");
 const menfessManager = require("./src/menfess-manager");
 const economyManager = require('./src/economy-manager');
 const gamesManager = require('./src/games-manager');
+const soundboardManager = require('./src/soundboard-manager');
 const { makeDiscordSticker, makeSticker, stickerToImage } = require('./src/sticker');
 const { upscaleImage } = require('./src/hd');
 const { makeBratSticker, makeBratVideoSticker } = require('./src/brat');
@@ -673,7 +674,11 @@ async function handleCommand({ message, command, args, rawText }) {
               `\`${prefix}tts <teks>\` - Ubah teks menjadi suara Google (MP3)`,
               `\`${prefix}tomp3\` - Reply video untuk diekstrak jadi audio MP3`,
               `\`${prefix}transkrip\` - Reply pesan suara/audio untuk diubah ke teks`,
-              `\`${prefix}bass\`, \`${prefix}slow\`, \`${prefix}robot\`, \`${prefix}chipmunk\` - Efek audio`
+              `\`${prefix}bass\`, \`${prefix}slow\`, \`${prefix}robot\`, \`${prefix}chipmunk\` - Efek audio`,
+              `\`${prefix}addsound <nama> [detik]\` - Convert MP3/audio jadi soundboard server`,
+              `\`${prefix}playsound <nama>\` - Putar soundboard langsung ke Voice Channel`,
+              `\`${prefix}listsound\` - Lihat daftar soundboard server`,
+              `\`${prefix}delsound <nama>\` - Hapus soundboard dari server`
             ].join('\n')
           },
           {
@@ -1406,6 +1411,251 @@ async function handleCommand({ message, command, args, rawText }) {
         replyTextOutput = `[Audio Filter ${command} Terkirim]`;
       } catch (err) {
         await message.reply({ content: `❌ Gagal filter audio: ${err.message}` });
+      }
+      break;
+    }
+
+    // --- SOUNDBOARD VOICE CHANNEL ---
+    case 'addsound':
+    case 'soundboard':
+    case 'sb':
+    case 'convertsb':
+    case 'tomp3sb': {
+      if (!message.guild) {
+        await message.reply({ content: '❌ Perintah soundboard hanya bisa digunakan di dalam server Discord.' });
+        break;
+      }
+
+      const sub = (args[0] || '').toLowerCase();
+      if (sub === 'list') {
+        return await handleCommand({ message, command: 'listsound', args: args.slice(1), rawText });
+      }
+      if (sub === 'play') {
+        return await handleCommand({ message, command: 'playsound', args: args.slice(1), rawText });
+      }
+      if (sub === 'del' || sub === 'delete' || sub === 'remove') {
+        return await handleCommand({ message, command: 'delsound', args: args.slice(1), rawText });
+      }
+
+      let soundName = '';
+      let startSec = 0;
+      let argSlice = sub === 'add' ? args.slice(1) : args;
+
+      if (argSlice.length > 0) {
+        soundName = argSlice[0].trim();
+        if (argSlice[1] && !isNaN(parseFloat(argSlice[1]))) {
+          startSec = parseFloat(argSlice[1]);
+        }
+      }
+
+      const media = await getMediaBuffer(message, argSlice.slice(1));
+      if (!media || !media.buffer) {
+        const helpEmbed = new EmbedBuilder()
+          .setColor('#5865F2')
+          .setTitle('🎙️ Convert MP3 ke Soundboard Voice Channel')
+          .setDescription([
+            'Fitur ini mengonversi file audio atau video menjadi Soundboard resmi Discord agar bisa langsung diputar di Voice Channel!',
+            '',
+            '📌 **Cara Penggunaan:**',
+            `1. **Lampirkan MP3/Audio/Video** dan beri caption:`,
+            `   \`${prefix}addsound <nama_sound> [detik_mulai]\``,
+            `2. **Atau reply** pesan yang berisi audio/MP3 dengan:`,
+            `   \`${prefix}addsound <nama_sound>\``,
+            `3. **Atau gunakan link audio langsung:**`,
+            `   \`${prefix}addsound <nama_sound> <link_mp3>\``,
+            '',
+            '💡 **Contoh:**',
+            `• \`${prefix}addsound ketawa\` (potong 5.2 detik dari awal)`,
+            `• \`${prefix}addsound meme 8\` (potong 5.2 detik mulai detik ke-8)`,
+            `• \`${prefix}playsound ketawa\` (putar di Voice Channel)`,
+            `• \`${prefix}listsound\` (lihat daftar soundboard server)`
+          ].join('\n'))
+          .setFooter({ text: 'Maksimal durasi: 5.2 detik (standar Discord Soundboard)' });
+        await message.reply({ embeds: [helpEmbed] });
+        break;
+      }
+
+      if (!soundName && media.name) {
+        soundName = path.parse(media.name).name.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 20);
+      }
+      if (!soundName || soundName.length < 2) {
+        soundName = `sound_${Date.now().toString().slice(-4)}`;
+      }
+
+      const waitMsg = await message.reply({ content: `⏳ Mengonversi audio **${soundName}** menjadi format Soundboard Discord...` });
+
+      try {
+        const botToken = client.token || process.env.DISCORD_TOKEN;
+        const created = await soundboardManager.createSoundboardSound(botToken, message.guild.id, {
+          name: soundName,
+          audioBuffer: media.buffer,
+          startSec: startSec,
+          emojiName: '🔊'
+        });
+
+        const successEmbed = new EmbedBuilder()
+          .setColor('#57F287')
+          .setTitle('✅ Soundboard Berhasil Dibuat & Siap Diputar!')
+          .setDescription([
+            `Suara **${created.name}** resmi terdaftar di Soundboard server!`,
+            '',
+            `🎵 **Nama Sound:** \`${created.name}\``,
+            `⏱️ **Durasi:** Maks 5.2 detik`,
+            `🔊 **Emoji:** ${created.emoji_name || '🔊'}`,
+            `🆔 **Sound ID:** \`${created.sound_id}\``,
+            '',
+            '🎮 **Cara Memutar di Voice Channel:**',
+            `1. Masuk ke Voice Channel (misal: Voice Lobby).`,
+            `2. Ketik perintah: \`${prefix}playsound ${created.name}\``,
+            `3. Atau klik langsung icon **Soundboard** di panel Voice Channel Discord kamu!`
+          ].join('\n'))
+          .setFooter({ text: `Dibuat oleh ${message.author.displayName || message.author.username}` })
+          .setTimestamp();
+
+        await waitMsg.edit({ content: null, embeds: [successEmbed] });
+        replyTextOutput = `[Soundboard ${created.name} berhasil dibuat]`;
+      } catch (err) {
+        console.error('Error create soundboard:', err);
+        await waitMsg.edit({ content: `❌ Gagal membuat soundboard: ${err.message}` });
+      }
+      break;
+    }
+
+    case 'playsound':
+    case 'sbplay':
+    case 'playvc':
+    case 'putarsound': {
+      if (!message.guild) {
+        await message.reply({ content: '❌ Perintah soundboard hanya bisa digunakan di dalam server Discord.' });
+        break;
+      }
+
+      const voiceChannel = message.member?.voice?.channel;
+      if (!voiceChannel) {
+        const text = `⚠️ **Kamu belum masuk ke Voice Channel!**\nSilakan join ke salah satu voice channel terlebih dahulu, lalu ketik:\n\`${prefix}playsound <nama_sound>\``;
+        await message.reply({ content: text });
+        replyTextOutput = text;
+        return replyTextOutput;
+      }
+
+      const query = args.join(' ').toLowerCase().trim();
+      if (!query) {
+        await message.reply({ content: `⚠️ Masukkan nama soundboard! Contoh: \`${prefix}playsound <nama>\` atau cek daftar dengan \`${prefix}listsound\`` });
+        break;
+      }
+
+      try {
+        const botToken = client.token || process.env.DISCORD_TOKEN;
+        const sounds = await soundboardManager.listSoundboardSounds(botToken, message.guild.id);
+        
+        if (!sounds || sounds.length === 0) {
+          await message.reply({ content: `⚠️ Server ini belum punya soundboard. Tambahkan sound baru dari MP3 dengan \`${prefix}addsound <nama>\`!` });
+          break;
+        }
+
+        const target = sounds.find(s => s.sound_id === query || s.name.toLowerCase() === query || s.name.toLowerCase().includes(query));
+
+        if (!target) {
+          const soundNames = sounds.map(s => `\`${s.name}\``).join(', ');
+          await message.reply({ content: `❌ Soundboard **"${query}"** tidak ditemukan!\n📋 Soundboard yang tersedia: ${soundNames}` });
+          break;
+        }
+
+        await soundboardManager.playSoundboardInVoice(botToken, voiceChannel.id, target.sound_id);
+        await message.react('🔊').catch(() => {});
+        await message.reply({ content: `🔊 Memutar soundboard **${target.name}** di <#${voiceChannel.id}>!` });
+        replyTextOutput = `[Memutar soundboard ${target.name} di Voice Channel]`;
+      } catch (err) {
+        console.error('Error play soundboard:', err);
+        await message.reply({ content: `❌ Gagal memutar soundboard di Voice Channel: ${err.message}` });
+      }
+      break;
+    }
+
+    case 'listsound':
+    case 'soundlist':
+    case 'sblist': {
+      if (!message.guild) {
+        await message.reply({ content: '❌ Perintah soundboard hanya bisa digunakan di dalam server Discord.' });
+        break;
+      }
+
+      try {
+        const botToken = client.token || process.env.DISCORD_TOKEN;
+        const sounds = await soundboardManager.listSoundboardSounds(botToken, message.guild.id);
+
+        if (!sounds || sounds.length === 0) {
+          await message.reply({
+            content: `📂 **Daftar Soundboard Server Kosong**\nBelum ada soundboard kustom di server ini.\nTambahkan soundboard dari file MP3 dengan: \`${prefix}addsound <nama>\``
+          });
+          break;
+        }
+
+        const lines = sounds.map((s, idx) => {
+          const emoji = s.emoji_name || '🔊';
+          return `**${idx + 1}.** ${emoji} **${s.name}** — \`${prefix}playsound ${s.name}\``;
+        });
+
+        const listEmbed = new EmbedBuilder()
+          .setColor('#5865F2')
+          .setTitle(`🎙️ Soundboard Server (${sounds.length} Sound)`)
+          .setDescription([
+            'Berikut daftar suara soundboard yang bisa diputar di Voice Channel server ini:',
+            '',
+            ...lines,
+            '',
+            '💡 **Tips:**',
+            `• Putar di Voice Channel: \`${prefix}playsound <nama>\``,
+            `• Tambah soundboard baru dari MP3: \`${prefix}addsound <nama>\``,
+            `• Hapus soundboard: \`${prefix}delsound <nama>\``
+          ].join('\n'))
+          .setFooter({ text: 'TuffBot Discord Soundboard' });
+
+        await message.reply({ embeds: [listEmbed] });
+      } catch (err) {
+        await message.reply({ content: `❌ Gagal mengambil daftar soundboard: ${err.message}` });
+      }
+      break;
+    }
+
+    case 'delsound':
+    case 'sbdel':
+    case 'hapussound': {
+      if (!message.guild) {
+        await message.reply({ content: '❌ Perintah soundboard hanya bisa digunakan di dalam server Discord.' });
+        break;
+      }
+
+      const isOwner = message.author.id === config.ownerId || message.author.id === process.env.OWNER_ID;
+      const isAdmin = message.member?.permissions?.has(PermissionsBitField.Flags.Administrator) ||
+                      message.member?.permissions?.has(PermissionsBitField.Flags.ManageGuildExpressions);
+
+      if (!isOwner && !isAdmin) {
+        await message.reply({ content: '❌ Kamu membutuhkan izin **Manage Expressions / Administrator** untuk menghapus soundboard server.' });
+        break;
+      }
+
+      const query = args.join(' ').toLowerCase().trim();
+      if (!query) {
+        await message.reply({ content: `⚠️ Masukkan nama soundboard yang ingin dihapus! Contoh: \`${prefix}delsound <nama>\`` });
+        break;
+      }
+
+      try {
+        const botToken = client.token || process.env.DISCORD_TOKEN;
+        const sounds = await soundboardManager.listSoundboardSounds(botToken, message.guild.id);
+        const target = sounds.find(s => s.sound_id === query || s.name.toLowerCase() === query);
+
+        if (!target) {
+          await message.reply({ content: `❌ Soundboard **"${query}"** tidak ditemukan di server ini.` });
+          break;
+        }
+
+        await soundboardManager.deleteSoundboardSound(botToken, message.guild.id, target.sound_id);
+        await message.reply({ content: `🗑️ Soundboard **${target.name}** berhasil dihapus dari server.` });
+        replyTextOutput = `[Soundboard ${target.name} dihapus]`;
+      } catch (err) {
+        await message.reply({ content: `❌ Gagal menghapus soundboard: ${err.message}` });
       }
       break;
     }
