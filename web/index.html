@@ -1,0 +1,960 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TuffBot — Live Soundboard & Dungeon Server</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0a0c10;
+      --card-bg: #12151d;
+      --card-hover: #181d28;
+      --border: #202636;
+      --primary: #5865F2;
+      --primary-hover: #4752c4;
+      --gold: #f59e0b;
+      --green: #10b981;
+      --red: #ef4444;
+      --text: #f3f4f6;
+      --text-muted: #9ca3af;
+      --radius: 14px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow-x: hidden;
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 8px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+    header {
+      background: rgba(18, 21, 29, 0.85);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      padding: 0.85rem 1.5rem;
+    }
+
+    .header-inner {
+      max-width: 1200px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      text-decoration: none;
+      color: inherit;
+    }
+
+    .brand-icon {
+      width: 40px;
+      height: 40px;
+      border-radius: 12px;
+      background: linear-gradient(135deg, #5865F2, #7983f5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.25rem;
+      box-shadow: 0 4px 14px rgba(88, 101, 242, 0.35);
+    }
+
+    .brand-text h1 {
+      font-size: 1.05rem;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+    }
+
+    .brand-text p {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 8px var(--green);
+    }
+
+    .user-pill {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      padding: 0.35rem 0.85rem;
+      border-radius: 999px;
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+      font-size: 0.85rem;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .user-pill:hover { border-color: var(--primary); }
+
+    .user-avatar {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: var(--border);
+      object-fit: cover;
+    }
+
+    .user-coins {
+      background: rgba(245, 158, 11, 0.15);
+      color: #fbbf24;
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 0.75rem;
+    }
+
+    /* Navigation Tabs */
+    .tabs-bar {
+      max-width: 1200px;
+      margin: 1.5rem auto 0;
+      padding: 0 1.5rem;
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .tab-btn {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      padding: 0.65rem 1.25rem;
+      border-radius: 12px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      transition: all 0.2s;
+    }
+    .tab-btn:hover { color: var(--text); background: var(--card-hover); }
+    .tab-btn.active {
+      color: #fff;
+      background: var(--primary);
+      border-color: var(--primary);
+      box-shadow: 0 4px 14px rgba(88, 101, 242, 0.3);
+    }
+
+    main {
+      max-width: 1200px;
+      margin: 1.5rem auto 3rem;
+      padding: 0 1.5rem;
+      flex: 1;
+      width: 100%;
+    }
+
+    .tab-content { display: none; }
+    .tab-content.active { display: block; animation: fadeIn 0.25s ease-out; }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Soundboard Section */
+    .vc-bar {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      padding: 1rem 1.25rem;
+      border-radius: var(--radius);
+      margin-bottom: 1.5rem;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+
+    .vc-select-group {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      flex: 1;
+      min-width: 260px;
+    }
+
+    select, input[type="text"] {
+      background: #0d1017;
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 0.65rem 1rem;
+      border-radius: 10px;
+      font-size: 0.88rem;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    select:focus, input[type="text"]:focus { border-color: var(--primary); }
+
+    .btn {
+      background: var(--primary);
+      color: #fff;
+      border: none;
+      padding: 0.65rem 1.25rem;
+      border-radius: 10px;
+      font-weight: 600;
+      font-size: 0.88rem;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      transition: all 0.2s;
+    }
+    .btn:hover { background: var(--primary-hover); transform: translateY(-1px); }
+    .btn-danger { background: var(--red); }
+    .btn-danger:hover { background: #dc2626; }
+    .btn-secondary { background: var(--border); color: var(--text); }
+    .btn-secondary:hover { background: #2d3548; }
+
+    .sound-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 1rem;
+    }
+
+    .sound-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.1rem;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      transition: all 0.2s;
+      position: relative;
+    }
+    .sound-card:hover {
+      border-color: var(--primary);
+      transform: translateY(-2px);
+      box-shadow: 0 6px 16px rgba(0,0,0,0.3);
+    }
+
+    .sound-header {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-bottom: 0.85rem;
+    }
+    .sound-emoji {
+      font-size: 1.75rem;
+      background: rgba(255,255,255,0.05);
+      width: 44px;
+      height: 44px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .sound-title { font-weight: 700; font-size: 0.95rem; }
+    .sound-meta {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    /* Dungeon RPG Section */
+    .dungeon-container {
+      display: grid;
+      grid-template-columns: 1fr 320px;
+      gap: 1.5rem;
+    }
+    @media (max-width: 900px) {
+      .dungeon-container { grid-template-columns: 1fr; }
+    }
+
+    .dungeon-arena {
+      background: linear-gradient(180deg, #161a24 0%, #0d1017 100%);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 2rem;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 380px;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .arena-monster {
+      font-size: 5rem;
+      margin-bottom: 1rem;
+      filter: drop-shadow(0 0 20px rgba(88, 101, 242, 0.4));
+      animation: float 3s ease-in-out infinite;
+    }
+    @keyframes float {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-8px); }
+    }
+
+    .hp-bar-bg {
+      width: 100%;
+      max-width: 320px;
+      height: 12px;
+      background: #1f2430;
+      border-radius: 6px;
+      overflow: hidden;
+      margin: 0.5rem auto 1rem;
+      border: 1px solid rgba(255,255,255,0.1);
+    }
+    .hp-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #ef4444, #f87171);
+      transition: width 0.3s;
+    }
+
+    .dungeon-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      justify-content: center;
+      margin-top: 1.5rem;
+    }
+
+    .side-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .panel-box {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.25rem;
+    }
+    .panel-box h3 {
+      font-size: 0.95rem;
+      font-weight: 700;
+      margin-bottom: 0.85rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .stat-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.85rem;
+      margin-bottom: 0.5rem;
+    }
+    .stat-row span:first-child { color: var(--text-muted); }
+    .stat-row span:last-child { font-weight: 600; font-family: 'JetBrains Mono', monospace; }
+
+    .log-box {
+      background: #0a0c10;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.75rem;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.78rem;
+      color: #94a3b8;
+      max-height: 180px;
+      overflow-y: auto;
+      line-height: 1.5;
+    }
+
+    /* Shop Section */
+    .shop-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+      gap: 1.25rem;
+    }
+    .shop-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.25rem;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      transition: all 0.2s;
+    }
+    .shop-card:hover {
+      border-color: var(--gold);
+      transform: translateY(-2px);
+    }
+    .shop-card-header {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-bottom: 0.65rem;
+    }
+    .shop-card-emoji { font-size: 2rem; }
+    .shop-card-price {
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 700;
+      color: #fbbf24;
+      font-size: 0.95rem;
+    }
+    .shop-card-desc {
+      font-size: 0.82rem;
+      color: var(--text-muted);
+      margin: 0.65rem 0 1.2rem;
+      line-height: 1.45;
+    }
+
+    /* Toast Notification */
+    #toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: #181d28;
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--primary);
+      padding: 0.85rem 1.25rem;
+      border-radius: 10px;
+      color: #fff;
+      font-size: 0.88rem;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+      z-index: 1000;
+      display: none;
+      animation: slideIn 0.2s ease-out;
+    }
+    @keyframes slideIn {
+      from { transform: translateX(100%); opacity: 0; }
+      to { transform: translateX(0); opacity: 1; }
+    }
+
+    /* Modal */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.7);
+      backdrop-filter: blur(4px);
+      z-index: 999;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+    }
+    .modal-box {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      max-width: 440px;
+      width: 100%;
+      padding: 1.5rem;
+    }
+    .modal-box h2 {
+      font-size: 1.2rem;
+      margin-bottom: 0.75rem;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="header-inner">
+      <a href="/" class="brand">
+        <div class="brand-icon">🎮</div>
+        <div class="brand-text">
+          <h1 id="guild-title">TuffBot Server</h1>
+          <p><span class="status-dot"></span> <span id="bot-status">Bot Aktif • 1 Server</span></p>
+        </div>
+      </a>
+
+      <div style="display: flex; align-items: center; gap: 0.75rem;">
+        <div id="user-badge" class="user-pill" onclick="openLoginModal()">
+          <img id="user-avatar" class="user-avatar" src="https://cdn.discordapp.com/embed/avatars/0.png" alt="Avatar">
+          <span id="user-name" style="font-weight: 600;">Pilih Akun Member</span>
+          <span id="user-coins" class="user-coins">🪙 0</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <nav class="tabs-bar">
+    <button class="tab-btn active" onclick="switchTab('soundboard')">🎧 Live Soundboard</button>
+    <button class="tab-btn" onclick="switchTab('dungeon')">⚔️ Dungeon RPG</button>
+    <button class="tab-btn" onclick="switchTab('shop')">🛒 Toko & Koin</button>
+    <button class="tab-btn" onclick="switchTab('leaderboard')">🏆 Member Terkaya</button>
+  </nav>
+
+  <main>
+    <!-- TAB 1: SOUNDBOARD -->
+    <section id="tab-soundboard" class="tab-content active">
+      <div class="vc-bar">
+        <div class="vc-select-group">
+          <span style="font-size: 1.25rem;">🔊</span>
+          <div style="flex: 1;">
+            <div style="font-size: 0.75rem; color: var(--text-muted); font-weight: 600;">PILIH VOICE CHANNEL</div>
+            <select id="vc-select" style="width: 100%; margin-top: 4px;">
+              <option value="">Memuat Voice Channel...</option>
+            </select>
+          </div>
+        </div>
+
+        <div style="display: flex; gap: 0.5rem; align-items: center;">
+          <input type="text" id="sound-search" placeholder="Cari audio suara..." oninput="filterSounds()" style="min-width: 200px;">
+          <button class="btn btn-danger" onclick="stopAudio()"><span style="font-size: 1rem;">⏹️</span> Stop VC</button>
+        </div>
+      </div>
+
+      <div id="sounds-container" class="sound-grid">
+        <div style="grid-column: 1/-1; text-align: center; color: var(--text-muted); padding: 2rem;">
+          Memuat daftar suara server...
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 2: DUNGEON RPG -->
+    <section id="tab-dungeon" class="tab-content">
+      <div class="dungeon-container">
+        <div class="dungeon-arena">
+          <div id="monster-icon" class="arena-monster">🚪</div>
+          <h2 id="monster-name" style="font-size: 1.5rem; margin-bottom: 0.25rem;">Pintu Masuk Dungeon</h2>
+          <p id="monster-status" style="color: var(--text-muted); font-size: 0.88rem;">Bersiaplah untuk menjelajahi lantai pertama!</p>
+
+          <div class="hp-bar-bg" id="monster-hp-container" style="display: none;">
+            <div id="monster-hp-fill" class="hp-bar-fill" style="width: 100%;"></div>
+          </div>
+          <div id="monster-hp-text" style="font-family: 'JetBrains Mono', monospace; font-size: 0.78rem; color: #f87171; display: none;">HP: 0/0</div>
+
+          <div class="dungeon-actions">
+            <button class="btn" onclick="dungeonAction('explore')">🔍 Jelajahi Lantai</button>
+            <button class="btn" id="btn-attack" onclick="dungeonAction('attack')" disabled>⚔️ Serang Musuh</button>
+            <button class="btn btn-secondary" onclick="dungeonAction('heal')">🧪 Minum Ramuan</button>
+            <button class="btn btn-secondary" id="btn-retreat" onclick="dungeonAction('retreat')" disabled>💨 Mundur</button>
+          </div>
+        </div>
+
+        <div class="side-panel">
+          <div class="panel-box">
+            <h3>🛡️ Status Pendekar</h3>
+            <div class="stat-row"><span>Lantai:</span><span id="player-floor" style="color: #60a5fa;">Lantai 1</span></div>
+            <div class="stat-row"><span>Level:</span><span id="player-level" style="color: #fbbf24;">Level 1</span></div>
+            <div class="stat-row"><span>XP Progress:</span><span id="player-xp">0 / 100</span></div>
+            <div class="stat-row"><span>Darah (HP):</span><span id="player-hp" style="color: #f87171;">35 / 35</span></div>
+            <div class="hp-bar-bg" style="margin-top: 6px;">
+              <div id="player-hp-fill" class="hp-bar-fill" style="width: 100%; background: linear-gradient(90deg, #10b981, #34d399);"></div>
+            </div>
+          </div>
+
+          <div class="panel-box">
+            <h3>🗡️ Perlengkapan</h3>
+            <div class="stat-row"><span>Senjata:</span><span id="eq-weapon">Tangan Kosong</span></div>
+            <div class="stat-row"><span>Zirah:</span><span id="eq-armor">Baju Biasa</span></div>
+            <div class="stat-row"><span>Pet:</span><span id="eq-pet">Tidak Ada</span></div>
+          </div>
+
+          <div class="panel-box">
+            <h3>📜 Catatan Petualangan</h3>
+            <div id="dungeon-log" class="log-box">Kamu bersiap di depan gerbang dungeon...</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: TOKO & EKONOMI -->
+    <section id="tab-shop" class="tab-content">
+      <div style="margin-bottom: 1.5rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+        <div>
+          <h2 style="font-size: 1.4rem;">🛒 Toko Hadiah & Perlengkapan Koin</h2>
+          <p style="color: var(--text-muted); font-size: 0.88rem;">Tukar koin yang kamu kumpulkan di Discord dengan item, buff, dan perlengkapan dungeon!</p>
+        </div>
+        <div style="background: var(--card-bg); border: 1px solid var(--border); padding: 0.65rem 1.25rem; border-radius: 12px; font-family: 'JetBrains Mono', monospace;">
+          Saldo Dompet: <span id="shop-wallet-balance" style="color: #fbbf24; font-weight: 700;">🪙 0</span>
+        </div>
+      </div>
+
+      <div id="shop-container" class="shop-grid">
+        <div style="grid-column: 1/-1; text-align: center; color: var(--text-muted); padding: 2rem;">
+          Memuat item toko...
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 4: LEADERBOARD -->
+    <section id="tab-leaderboard" class="tab-content">
+      <div style="margin-bottom: 1.5rem;">
+        <h2 style="font-size: 1.4rem;">🏆 Peringkat Member Terkaya</h2>
+        <p style="color: var(--text-muted); font-size: 0.88rem;">Top 10 anggota server dengan kekayaan koin tertinggi di database bot Discord.</p>
+      </div>
+
+      <div class="panel-box" style="padding: 0; overflow-x: auto;">
+        <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 0.88rem;">
+          <thead>
+            <tr style="border-bottom: 1px solid var(--border); background: #0d1017; color: var(--text-muted);">
+              <th style="padding: 1rem 1.25rem;">#</th>
+              <th style="padding: 1rem 1.25rem;">User ID / Member</th>
+              <th style="padding: 1rem 1.25rem;">Gelar</th>
+              <th style="padding: 1rem 1.25rem;">Dompet</th>
+              <th style="padding: 1rem 1.25rem;">Bank</th>
+              <th style="padding: 1rem 1.25rem;">Total Koin</th>
+            </tr>
+          </thead>
+          <tbody id="leaderboard-body">
+            <tr><td colspan="6" style="padding: 2rem; text-align: center; color: var(--text-muted);">Memuat peringkat...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <!-- Login Modal -->
+  <div id="login-modal" class="modal-overlay">
+    <div class="modal-box">
+      <h2>Pilih Akun Masuk</h2>
+      <p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 1.25rem;">
+        Masukkan Discord User ID milikmu untuk menghubungkan saldo koin & progres game ke web dashboard ini.
+      </p>
+
+      <div style="margin-bottom: 1rem;">
+        <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 6px;">DISCORD USER ID</label>
+        <input type="text" id="input-userid" placeholder="Contoh: 1324366982237392978" style="width: 100%;">
+      </div>
+
+      <div style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1.5rem;">
+        <button class="btn btn-secondary" onclick="closeLoginModal()">Batal</button>
+        <button class="btn" onclick="submitLogin()">Masuk Sekarang</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast">Notifikasi</div>
+
+  <script>
+    let currentUserId = localStorage.getItem('tuffbot_user_id') || '1324366982237392978';
+    let allSounds = [];
+
+    function showToast(text, isError = false) {
+      const t = document.getElementById('toast');
+      t.innerText = text;
+      t.style.borderLeftColor = isError ? 'var(--red)' : 'var(--primary)';
+      t.style.display = 'block';
+      setTimeout(() => { t.style.display = 'none'; }, 3500);
+    }
+
+    function switchTab(tabId) {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+      event.currentTarget.classList.add('active');
+      document.getElementById('tab-' + tabId).classList.add('active');
+
+      if (tabId === 'dungeon') fetchDungeon();
+      if (tabId === 'shop') fetchShop();
+      if (tabId === 'leaderboard') fetchLeaderboard();
+    }
+
+    function openLoginModal() {
+      document.getElementById('input-userid').value = currentUserId;
+      document.getElementById('login-modal').style.display = 'flex';
+    }
+    function closeLoginModal() {
+      document.getElementById('login-modal').style.display = 'none';
+    }
+
+    async function submitLogin() {
+      const uid = document.getElementById('input-userid').value.trim();
+      if (!uid) return showToast('User ID tidak boleh kosong!', true);
+      currentUserId = uid;
+      localStorage.setItem('tuffbot_user_id', uid);
+      closeLoginModal();
+      await fetchMe();
+      showToast('Berhasil terhubung dengan User ID: ' + uid);
+    }
+
+    async function fetchGuild() {
+      try {
+        const res = await fetch('/api/guild');
+        const data = await res.json();
+        if (data.name) document.getElementById('guild-title').innerText = data.name;
+        if (data.memberCount) document.getElementById('bot-status').innerText = `Bot Aktif • ${data.memberCount} Anggota`;
+
+        const select = document.getElementById('vc-select');
+        select.innerHTML = '';
+        if (data.channels && data.channels.length > 0) {
+          data.channels.forEach(ch => {
+            const opt = document.createElement('option');
+            opt.value = ch.id;
+            opt.innerText = `🔊 ${ch.name} (${ch.membersCount} orang)`;
+            select.appendChild(opt);
+          });
+        } else {
+          select.innerHTML = '<option value="">Tidak ada Voice Channel aktif</option>';
+        }
+      } catch (e) {
+        console.error('Guild fetch error:', e);
+      }
+    }
+
+    async function fetchMe() {
+      try {
+        const res = await fetch(`/api/me?user_id=${currentUserId}`);
+        const data = await res.json();
+        if (data.authenticated) {
+          document.getElementById('user-name').innerText = data.username;
+          if (data.avatar) document.getElementById('user-avatar').src = data.avatar;
+          const totalWallet = (data.economy.wallet || 0).toLocaleString();
+          document.getElementById('user-coins').innerText = `🪙 ${totalWallet}`;
+          document.getElementById('shop-wallet-balance').innerText = `🪙 ${totalWallet}`;
+        }
+      } catch (e) {
+        console.error('Me fetch error:', e);
+      }
+    }
+
+    async function fetchSounds() {
+      try {
+        const res = await fetch('/api/sounds');
+        const data = await res.json();
+        allSounds = [...(data.nativeSounds || []), ...(data.customSounds || [])];
+        renderSounds(allSounds);
+      } catch (e) {
+        console.error('Sounds error:', e);
+      }
+    }
+
+    function renderSounds(list) {
+      const container = document.getElementById('sounds-container');
+      container.innerHTML = '';
+      if (!list.length) {
+        container.innerHTML = '<div style="grid-column: 1/-1; text-align: center; color: var(--text-muted); padding: 2rem;">Tidak ada audio yang cocok.</div>';
+        return;
+      }
+      list.forEach(s => {
+        const card = document.createElement('div');
+        card.className = 'sound-card';
+        card.innerHTML = `
+          <div>
+            <div class="sound-header">
+              <div class="sound-emoji">${s.emoji || '🎵'}</div>
+              <div>
+                <div class="sound-title">${s.name}</div>
+                <div class="sound-meta">${s.isNative ? 'Official Soundboard (5s)' : 'Custom Audio (' + (s.duration || 'Full') + ')'}</div>
+              </div>
+            </div>
+          </div>
+          <button class="btn" style="width: 100%; justify-content: center; margin-top: 0.5rem;" onclick="playSound('${s.id}', ${s.isNative})">
+            ▶️ Putar ke VC
+          </button>
+        `;
+        container.appendChild(card);
+      });
+    }
+
+    function filterSounds() {
+      const q = document.getElementById('sound-search').value.toLowerCase();
+      renderSounds(allSounds.filter(s => s.name.toLowerCase().includes(q)));
+    }
+
+    async function playSound(soundId, isNative) {
+      const channelId = document.getElementById('vc-select').value;
+      if (!channelId) return showToast('Pilih Voice Channel tujuan terlebih dahulu!', true);
+      showToast('Mengirim audio ke Voice Channel...');
+      try {
+        const res = await fetch('/api/sounds/play', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ soundId, channelId, isNative })
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast('🔊 ' + data.message);
+        } else {
+          showToast('❌ Gagal: ' + (data.error || 'Terjadi kesalahan'), true);
+        }
+      } catch (e) {
+        showToast('❌ Gagal memutar suara: ' + e.message, true);
+      }
+    }
+
+    async function stopAudio() {
+      try {
+        const res = await fetch('/api/sounds/stop', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({})
+        });
+        const data = await res.json();
+        showToast(data.message || 'Audio dihentikan.');
+      } catch (e) {
+        showToast('Gagal menghentikan audio.', true);
+      }
+    }
+
+    /* Dungeon RPG */
+    async function fetchDungeon() {
+      try {
+        const res = await fetch(`/api/dungeon?user_id=${currentUserId}`);
+        const st = await res.json();
+        renderDungeon(st);
+      } catch (e) {
+        console.error('Dungeon error:', e);
+      }
+    }
+
+    function renderDungeon(st) {
+      document.getElementById('player-floor').innerText = `Lantai ${st.floor}`;
+      document.getElementById('player-level').innerText = `Level ${st.level}`;
+      document.getElementById('player-xp').innerText = `${st.xp} / ${st.level * 100}`;
+      document.getElementById('player-hp').innerText = `${st.hp} / ${st.maxHp}`;
+      const hpPct = Math.max(0, Math.min(100, (st.hp / st.maxHp) * 100));
+      document.getElementById('player-hp-fill').style.width = hpPct + '%';
+
+      document.getElementById('eq-weapon').innerText = st.equippedWeapon === 'iron_sword' ? '🗡️ Pedang Penjelajah (+12)' : 'Tangan Kosong';
+      document.getElementById('eq-armor').innerText = st.equippedArmor === 'moon_armor' ? '🛡️ Zirah Bulan (-6 DMG)' : 'Baju Biasa';
+      document.getElementById('eq-pet').innerText = st.equippedPet === 'cave_fox' ? '🦊 Rubah Gua (+35% Koin)' : 'Tidak Ada';
+
+      if (st.lastLog) document.getElementById('dungeon-log').innerText = st.lastLog;
+
+      const monsterContainer = document.getElementById('monster-hp-container');
+      const monsterText = document.getElementById('monster-hp-text');
+      const btnAttack = document.getElementById('btn-attack');
+      const btnRetreat = document.getElementById('btn-retreat');
+
+      if (st.encounter && st.encounter.hp > 0) {
+        document.getElementById('monster-icon').innerText = st.encounter.emoji;
+        document.getElementById('monster-name').innerText = st.encounter.name;
+        document.getElementById('monster-status').innerText = `Monster menghadang! Serangan: ${st.encounter.attack} ATK`;
+        monsterContainer.style.display = 'block';
+        monsterText.style.display = 'block';
+        const mPct = Math.max(0, Math.min(100, (st.encounter.hp / st.encounter.maxHp) * 100));
+        document.getElementById('monster-hp-fill').style.width = mPct + '%';
+        monsterText.innerText = `HP: ${st.encounter.hp} / ${st.encounter.maxHp}`;
+        btnAttack.disabled = false;
+        btnRetreat.disabled = false;
+      } else {
+        document.getElementById('monster-icon').innerText = '🚪';
+        document.getElementById('monster-name').innerText = `Lantai ${st.floor} - Koridor Aman`;
+        document.getElementById('monster-status').innerText = 'Tidak ada musuh. Klik "Jelajahi Lantai" untuk mencari monster atau harta karun!';
+        monsterContainer.style.display = 'none';
+        monsterText.style.display = 'none';
+        btnAttack.disabled = true;
+        btnRetreat.disabled = true;
+      }
+    }
+
+    async function dungeonAction(act) {
+      try {
+        const res = await fetch(`/api/dungeon/action?user_id=${currentUserId}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: act })
+        });
+        const data = await res.json();
+        if (data.success) {
+          renderDungeon(data.state);
+          fetchMe(); // update balance
+        } else {
+          showToast(data.error || 'Aksi gagal', true);
+        }
+      } catch (e) {
+        showToast('Aksi gagal: ' + e.message, true);
+      }
+    }
+
+    /* Shop */
+    async function fetchShop() {
+      try {
+        const res = await fetch('/api/shop');
+        const data = await res.json();
+        const container = document.getElementById('shop-container');
+        container.innerHTML = '';
+        data.items.forEach(it => {
+          const card = document.createElement('div');
+          card.className = 'shop-card';
+          card.innerHTML = `
+            <div>
+              <div class="shop-card-header">
+                <div class="shop-card-emoji">${it.emoji}</div>
+                <div>
+                  <div style="font-weight: 700;">${it.name}</div>
+                  <div class="shop-card-price">🪙 ${it.price.toLocaleString()} Koin</div>
+                </div>
+              </div>
+              <div class="shop-card-desc">${it.desc}</div>
+            </div>
+            <button class="btn" style="width: 100%; justify-content: center;" onclick="buyItem('${it.id}')">
+              Beli Sekarang
+            </button>
+          `;
+          container.appendChild(card);
+        });
+      } catch (e) {
+        console.error('Shop error:', e);
+      }
+    }
+
+    async function buyItem(itemId) {
+      try {
+        const res = await fetch(`/api/shop/buy?user_id=${currentUserId}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ itemId })
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast(data.message);
+          fetchMe();
+        } else {
+          showToast(data.error || 'Gagal membeli item.', true);
+        }
+      } catch (e) {
+        showToast('Gagal: ' + e.message, true);
+      }
+    }
+
+    /* Leaderboard */
+    async function fetchLeaderboard() {
+      try {
+        const res = await fetch('/api/leaderboard');
+        const data = await res.json();
+        const tbody = document.getElementById('leaderboard-body');
+        tbody.innerHTML = '';
+        data.leaderboard.forEach((user, idx) => {
+          const tr = document.createElement('tr');
+          tr.style.borderBottom = '1px solid var(--border)';
+          const medal = idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : `${idx + 1}`;
+          tr.innerHTML = `
+            <td style="padding: 1rem 1.25rem; font-weight: 700;">${medal}</td>
+            <td style="padding: 1rem 1.25rem; font-weight: 600;">${user.userId}</td>
+            <td style="padding: 1rem 1.25rem; color: #a78bfa;">${user.title || '-'}</td>
+            <td style="padding: 1rem 1.25rem; font-family: 'JetBrains Mono', monospace; color: #fbbf24;">🪙 ${user.wallet.toLocaleString()}</td>
+            <td style="padding: 1rem 1.25rem; font-family: 'JetBrains Mono', monospace; color: #9ca3af;">🏦 ${user.bank.toLocaleString()}</td>
+            <td style="padding: 1rem 1.25rem; font-family: 'JetBrains Mono', monospace; font-weight: 700; color: #10b981;">🪙 ${user.total.toLocaleString()}</td>
+          `;
+          tbody.appendChild(tr);
+        });
+      } catch (e) {
+        console.error('Leaderboard error:', e);
+      }
+    }
+
+    // Auto-init
+    fetchGuild();
+    fetchMe();
+    fetchSounds();
+  </script>
+</body>
+</html>

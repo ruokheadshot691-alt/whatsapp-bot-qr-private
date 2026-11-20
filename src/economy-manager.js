@@ -791,6 +791,38 @@ const SHOP_ITEMS = [
     price: 35000,
     desc: 'Kupon istimewa untuk membuat dan memasang gelar profil bebas sesukamu (.settitle <gelar>)!',
     type: 'usable'
+  },
+  {
+    id: 'iron_sword',
+    name: 'Pedang Penjelajah',
+    emoji: '🗡️',
+    price: 3500,
+    desc: 'Pedang tempaan kuat untuk menembus dungeon lebih dalam (+12 ATK di Dungeon RPG).',
+    type: 'weapon'
+  },
+  {
+    id: 'moon_armor',
+    name: 'Zirah Bulan',
+    emoji: '🛡️',
+    price: 4500,
+    desc: 'Pelindung kokoh penahan serangan monster di dungeon (-6 DMG dari serangan monster).',
+    type: 'armor'
+  },
+  {
+    id: 'cave_fox',
+    name: 'Rubah Gua Mistis',
+    emoji: '🦊',
+    price: 6000,
+    desc: 'Pet setia dungeon! Memberikan berkah koin & loot dungeon ekstra +35%.',
+    type: 'pet'
+  },
+  {
+    id: 'healing_potion',
+    name: 'Ramuan Pemulih',
+    emoji: '🧪',
+    price: 600,
+    desc: 'Ramuan instan untuk memulihkan 35 HP karakter saat menjelajah Dungeon RPG.',
+    type: 'potion'
   }
 ];
 
