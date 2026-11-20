@@ -1,0 +1,883 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TuffBot — Retro Pixel Casino & Game Hub</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0c0d0f;
+      --panel: #16181d;
+      --panel-dark: #101114;
+      --line: #2b2e37;
+      --gold: #ffb703;
+      --gold-dark: #7a5800;
+      --ruby: #e63946;
+      --ruby-dark: #7d1720;
+      --green: #3ddc84;
+      --ink: #f1ede4;
+      --mute: #8a8d95;
+      --font-px: 'Press Start 2P', monospace;
+      --font-mono: 'VT323', monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+    body {
+      background: var(--bg);
+      color: var(--ink);
+      font-family: var(--font-mono);
+      font-size: 20px;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow-x: hidden;
+    }
+    .px { font-family: var(--font-px); }
+    .gold-border {
+      border: 3px solid var(--gold);
+      box-shadow: 0 0 0 3px #000, 0 0 0 6px var(--gold-dark);
+    }
+    .pixel-box {
+      background: var(--panel);
+      border: 2px solid var(--line);
+      box-shadow: 3px 3px 0 0 #000;
+    }
+    @keyframes blink { 50% { opacity: 0; } }
+    .blink { animation: blink 0.8s steps(1) infinite; }
+    @keyframes bulb1 { 50% { background: #3a2a00; } }
+    @keyframes bulb2 { 50% { background: #450f14; } }
+    .bulb-gold { animation: bulb1 0.7s steps(1) infinite; }
+    .bulb-ruby { animation: bulb2 0.7s steps(1) infinite 0.35s; }
+
+    /* Header */
+    header {
+      background: #08090a;
+      border-bottom: 2px solid var(--line);
+      height: 72px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 24px;
+      gap: 16px;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      text-decoration: none;
+      color: inherit;
+    }
+    .brand-badge {
+      width: 38px;
+      height: 38px;
+      background: var(--gold);
+      color: #000;
+      display: grid;
+      place-items: center;
+      font-size: 13px;
+      font-weight: bold;
+    }
+    .marquee {
+      border: 2px solid var(--gold);
+      background: rgba(255, 183, 3, 0.08);
+      padding: 6px 20px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .marquee-title {
+      font-size: 14px;
+      color: var(--gold);
+      letter-spacing: 2px;
+    }
+
+    /* Main Grid */
+    main {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 280px 1fr 310px;
+      gap: 20px;
+      padding: 20px;
+      max-width: 1440px;
+      margin: 0 auto;
+      width: 100%;
+    }
+    @media (max-width: 1100px) {
+      main { grid-template-columns: 1fr; }
+    }
+
+    /* Left: Lobby */
+    .section-title {
+      font-size: 11px;
+      color: var(--mute);
+      letter-spacing: 1px;
+      margin-bottom: 10px;
+    }
+    .player-card {
+      padding: 12px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 10px;
+      transition: transform 0.1s;
+    }
+    .player-avatar {
+      width: 44px;
+      height: 44px;
+      background: #252830;
+      border: 2px solid var(--line);
+      display: grid;
+      place-items: center;
+      font-size: 20px;
+      border-radius: 4px;
+    }
+    .player-info { flex: 1; }
+    .player-name {
+      font-size: 22px;
+      line-height: 1;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .role-badge {
+      font-size: 8px;
+      padding: 2px 6px;
+      background: var(--gold);
+      color: #000;
+      border-radius: 2px;
+    }
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      background: var(--green);
+      box-shadow: 0 0 6px var(--green);
+      border-radius: 2px;
+    }
+    .status-dot.idle {
+      background: #555;
+      box-shadow: none;
+    }
+
+    /* Center: Slot Machine */
+    .slot-machine-wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+    .slot-cabinet {
+      background: #190e10;
+      border: 3px solid var(--gold);
+      box-shadow: 0 0 0 3px #000, 0 0 0 6px var(--gold-dark), 0 10px 30px rgba(0,0,0,0.8);
+      padding: 24px;
+      width: 100%;
+      max-width: 580px;
+      border-radius: 6px;
+    }
+    .jackpot-display {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+      padding: 8px 12px;
+      background: #000;
+      border: 2px solid var(--gold-dark);
+    }
+    .jackpot-text {
+      color: var(--gold);
+      font-size: 18px;
+      letter-spacing: 2px;
+    }
+    .reels-container {
+      background: #000;
+      border: 3px solid rgba(255, 183, 3, 0.6);
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 12px;
+      padding: 16px;
+      position: relative;
+    }
+    .reel-window {
+      height: 140px;
+      background: #f1ede4;
+      border: 3px solid #000;
+      box-shadow: inset 0 6px 12px rgba(0,0,0,0.4);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 64px;
+      overflow: hidden;
+      position: relative;
+    }
+    .reel-content {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      transition: transform 0.1s;
+    }
+    .reel-symbol {
+      height: 140px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: var(--font-px);
+      font-size: 56px;
+      color: var(--ruby);
+    }
+    .controls-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 24px;
+      gap: 16px;
+    }
+    .wager-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .wager-label {
+      font-size: 9px;
+      color: var(--mute);
+    }
+    .wager-buttons {
+      display: flex;
+      border: 2px solid var(--gold);
+    }
+    .wager-btn {
+      background: transparent;
+      border: none;
+      color: var(--gold);
+      padding: 8px 12px;
+      font-family: var(--font-px);
+      font-size: 11px;
+      cursor: pointer;
+      border-right: 1px solid var(--gold);
+    }
+    .wager-btn:last-child { border-right: none; }
+    .wager-btn.active {
+      background: var(--gold);
+      color: #000;
+    }
+    .push-btn {
+      width: 100px;
+      height: 100px;
+      border-radius: 50%;
+      background: var(--ruby);
+      border: 4px solid #000;
+      box-shadow: 0 8px 0 var(--ruby-dark), 0 10px 15px rgba(0,0,0,0.5);
+      color: #fff;
+      font-family: var(--font-px);
+      font-size: 14px;
+      cursor: pointer;
+      transition: all 0.08s;
+      outline: none;
+    }
+    .push-btn:active, .push-btn.pressed {
+      transform: translateY(6px);
+      box-shadow: 0 2px 0 var(--ruby-dark), 0 4px 6px rgba(0,0,0,0.5);
+    }
+    .push-btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    /* Right: Gacha */
+    .gacha-panel {
+      display: flex;
+      flex-direction: column;
+    }
+    .gacha-screen {
+      background: #000;
+      border: 2px solid var(--line);
+      height: 200px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      overflow: hidden;
+    }
+    .chest-svg {
+      width: 110px;
+      height: 90px;
+      transition: transform 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    }
+    .chest-svg.shake {
+      animation: chestShake 0.5s infinite;
+    }
+    @keyframes chestShake {
+      0%, 100% { transform: scale(1) rotate(0); }
+      25% { transform: scale(1.08) rotate(-4deg); }
+      75% { transform: scale(1.08) rotate(4deg); }
+    }
+    .gacha-rate-text {
+      position: absolute;
+      bottom: 8px;
+      font-size: 9px;
+      color: var(--mute);
+    }
+    .btn-action {
+      background: var(--gold);
+      color: #000;
+      font-family: var(--font-px);
+      font-size: 11px;
+      padding: 12px;
+      border: none;
+      box-shadow: 0 4px 0 var(--gold-dark);
+      cursor: pointer;
+      margin-top: 12px;
+      transition: all 0.1s;
+    }
+    .btn-action:active {
+      transform: translateY(3px);
+      box-shadow: 0 1px 0 var(--gold-dark);
+    }
+    .btn-action.secondary {
+      background: transparent;
+      color: var(--gold);
+      border: 2px solid var(--gold);
+      box-shadow: none;
+    }
+    .btn-action.secondary:active {
+      background: rgba(255,183,3,0.15);
+      transform: none;
+    }
+
+    /* Bottom: Terminal */
+    .terminal-bar {
+      margin: 16px 20px 20px;
+      background: #000;
+      border: 2px solid rgba(255, 183, 3, 0.7);
+      padding: 12px 20px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 26px;
+    }
+    .term-prompt { color: var(--gold); }
+    .term-input {
+      background: transparent;
+      border: none;
+      outline: none;
+      color: var(--ink);
+      font-family: var(--font-mono);
+      font-size: 26px;
+      flex: 1;
+    }
+    .term-cursor {
+      width: 12px;
+      height: 24px;
+      background: var(--gold);
+    }
+    .term-tag {
+      font-size: 9px;
+      color: var(--mute);
+    }
+
+    /* Toast / Notification Banner */
+    #banner-notify {
+      display: none;
+      position: fixed;
+      top: 85px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #000;
+      border: 3px solid var(--gold);
+      box-shadow: 0 0 20px rgba(255,183,3,0.6);
+      padding: 16px 32px;
+      text-align: center;
+      z-index: 100;
+    }
+
+    /* Rewards Modal */
+    #rewards-modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.85);
+      z-index: 200;
+      align-items: center;
+      justify-content: center;
+    }
+    .modal-box {
+      background: #14161a;
+      border: 3px solid var(--gold);
+      box-shadow: 0 0 0 4px #000, 0 0 25px rgba(255,183,3,0.4);
+      padding: 24px;
+      max-width: 500px;
+      width: 90%;
+      text-align: center;
+    }
+    .reward-item {
+      padding: 10px;
+      margin: 8px 0;
+      border: 2px solid var(--line);
+      background: #0b0c0e;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .rarity-SSR { color: #ff0055; text-shadow: 0 0 8px #ff0055; }
+    .rarity-SR { color: #ffb703; text-shadow: 0 0 6px #ffb703; }
+    .rarity-R { color: #3ddc84; }
+  </style>
+</head>
+<body>
+
+  <!-- Top Navigation Marquee -->
+  <header>
+    <a href="/index.html" class="brand">
+      <div class="brand-badge px">TB</div>
+      <span class="px" style="font-size:12px; color:var(--gold);">TUFFBOT</span>
+    </a>
+
+    <div class="marquee">
+      <span class="bulb-gold" style="width:8px; height:8px; display:inline-block; border-radius:50%; background:var(--gold);"></span>
+      <h1 class="marquee-title px">RETRO PIXEL CASINO</h1>
+      <span class="bulb-ruby" style="width:8px; height:8px; display:inline-block; border-radius:50%; background:var(--ruby);"></span>
+    </div>
+
+    <div style="display:flex; align-items:center; gap:16px;">
+      <span class="px" style="font-size:10px; color:var(--mute);">#ROOM-779</span>
+      <span class="px" style="font-size:10px; border:2px solid var(--line); padding:6px 10px;">4/6 P</span>
+      <div style="display:flex; align-items:center; gap:8px; border:2px solid var(--gold); padding:6px 12px; background:rgba(255,183,3,0.1);">
+        <span style="width:14px; height:14px; border-radius:50%; background:var(--gold); display:inline-block;"></span>
+        <span id="player-coins" class="px" style="font-size:13px; color:var(--gold);">5,200 C</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Notification Banner -->
+  <div id="banner-notify">
+    <div id="banner-title" class="px" style="font-size:14px; color:var(--gold); margin-bottom:6px;">ROUND STARTED!</div>
+    <div id="banner-desc" style="font-size:20px; color:#fff;">Ketik .slot atau klik tombol PUSH</div>
+  </div>
+
+  <!-- Main Arcade -->
+  <main>
+    <!-- Left: Room Lobby -->
+    <section>
+      <div class="section-title px">ROOM LOBBY (MABAR)</div>
+      
+      <div class="pixel-box player-card" style="border-color:var(--gold);">
+        <div class="player-avatar" style="border-color:var(--gold);">👑</div>
+        <div class="player-info">
+          <div class="player-name">
+            <span>rizkyy</span>
+            <span class="role-badge px">HOST</span>
+          </div>
+          <span style="font-size:16px; color:var(--gold);">@Moderator</span>
+        </div>
+        <div class="status-dot"></div>
+      </div>
+
+      <div class="pixel-box player-card">
+        <div class="player-avatar">👾</div>
+        <div class="player-info">
+          <div class="player-name"><span>nadia.exe</span></div>
+          <span style="font-size:16px; color:var(--mute);">@Member</span>
+        </div>
+        <div class="status-dot"></div>
+      </div>
+
+      <div class="pixel-box player-card">
+        <div class="player-avatar">🚀</div>
+        <div class="player-info">
+          <div class="player-name"><span>bagaskara</span></div>
+          <span style="font-size:16px; color:var(--mute);">@Booster</span>
+        </div>
+        <div class="status-dot"></div>
+      </div>
+
+      <div class="pixel-box player-card" style="opacity:0.65;">
+        <div class="player-avatar">🎮</div>
+        <div class="player-info">
+          <div class="player-name"><span>siska_gg</span></div>
+          <span style="font-size:16px; color:var(--mute);">@Member</span>
+        </div>
+        <div class="status-dot idle"></div>
+      </div>
+
+      <button id="btn-ready" class="btn-action px" style="width:100%; margin-top:8px;">TOGGLE READY</button>
+    </section>
+
+    <!-- Center: Slot Machine Cabinet -->
+    <section class="slot-machine-wrap">
+      <div class="slot-cabinet">
+        <div class="jackpot-display">
+          <span class="bulb-gold" style="width:10px; height:10px; border-radius:50%; background:var(--gold);"></span>
+          <span class="jackpot-text px">JACKPOT 77,700 C</span>
+          <span class="bulb-ruby" style="width:10px; height:10px; border-radius:50%; background:var(--ruby);"></span>
+        </div>
+
+        <div class="reels-container">
+          <div class="reel-window" id="reel-0">
+            <div class="reel-content" id="reel-content-0">
+              <div class="reel-symbol">7</div>
+            </div>
+          </div>
+          <div class="reel-window" id="reel-1">
+            <div class="reel-content" id="reel-content-1">
+              <div class="reel-symbol">7</div>
+            </div>
+          </div>
+          <div class="reel-window" id="reel-2">
+            <div class="reel-content" id="reel-content-2">
+              <div class="reel-symbol">🍒</div>
+            </div>
+          </div>
+        </div>
+
+        <div id="slot-result" style="text-align:center; min-height:30px; margin-top:14px; font-size:22px; color:var(--gold);">
+          PILIH WAGER & TEKAN PUSH
+        </div>
+
+        <div class="controls-row">
+          <div class="wager-group">
+            <span class="wager-label px">WAGER AMOUNT</span>
+            <div class="wager-buttons">
+              <button class="wager-btn" onclick="setWager(50)">50</button>
+              <button class="wager-btn active" onclick="setWager(100)">100</button>
+              <button class="wager-btn" onclick="setWager(250)">250</button>
+              <button class="wager-btn" onclick="setWager(500)">500</button>
+            </div>
+          </div>
+
+          <button id="btn-push" class="push-btn" onclick="spinSlot()">PUSH</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Right: Gacha Box -->
+    <section class="pixel-box gacha-panel" style="padding:20px;">
+      <div class="section-title px" style="color:var(--gold);">GACHA CHEST</div>
+
+      <div class="gacha-screen">
+        <svg id="chest-icon" class="chest-svg" viewBox="0 0 14 12" shape-rendering="crispEdges">
+          <rect x="1" y="2" width="12" height="4" fill="#8a4b1c"></rect>
+          <rect x="1" y="6" width="12" height="6" fill="#6b3a14"></rect>
+          <rect x="0" y="5" width="14" height="1" fill="#ffb703"></rect>
+          <rect x="6" y="4" width="2" height="4" fill="#ffb703"></rect>
+          <rect x="1" y="2" width="1" height="10" fill="#ffb703"></rect>
+          <rect x="12" y="2" width="1" height="10" fill="#ffb703"></rect>
+          <rect x="3" y="0" width="1" height="1" fill="#ffb703" class="blink"></rect>
+          <rect x="10" y="1" width="1" height="1" fill="#ffb703"></rect>
+        </svg>
+        <span class="gacha-rate-text px">SSR 3% • SR 15% • R 82%</span>
+      </div>
+
+      <div id="gacha-result" style="text-align:center; min-height:28px; margin-top:12px; font-size:18px; color:var(--ink);">
+        Buka peti untuk item langka!
+      </div>
+
+      <button class="btn-action" onclick="rollGacha(1)">ROLL x1 · 300 C</button>
+      <button class="btn-action secondary" onclick="rollGacha(10)">ROLL x10 · 2,700 C</button>
+      <button class="btn-action secondary" style="margin-top:16px;" onclick="openInventory()">LIHAT INVENTORY</button>
+    </section>
+  </main>
+
+  <!-- Interactive Terminal Bar -->
+  <div class="terminal-bar">
+    <span class="term-prompt">C:\&gt;</span>
+    <input type="text" id="term-input" class="term-input" placeholder="ketik .start untuk memulai ronde..." autocomplete="off">
+    <div class="term-cursor blink"></div>
+    <span class="term-tag px">HOST / CHAT</span>
+  </div>
+
+  <!-- Inventory / Rewards Modal -->
+  <div id="rewards-modal">
+    <div class="modal-box">
+      <h2 class="px" style="font-size:14px; color:var(--gold); margin-bottom:16px;">ARCADE INVENTORY</h2>
+      <div id="inventory-list" style="max-height:260px; overflow-y:auto; text-align:left;">
+        <div style="color:var(--mute); text-align:center;">Belum ada item gacha terkumpul.</div>
+      </div>
+      <button class="btn-action px" style="width:100%; margin-top:16px;" onclick="closeInventory()">TUTUP</button>
+    </div>
+  </div>
+
+  <script>
+    // Audio Synthesizer (Web Audio API)
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    let audioCtx = null;
+    function playBeep(freq = 440, type = 'square', duration = 0.08, vol = 0.15) {
+      try {
+        if (!audioCtx) audioCtx = new AudioCtx();
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+        gain.gain.setValueAtTime(vol, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + duration);
+      } catch (_) {}
+    }
+
+    function soundCoin() {
+      playBeep(987.77, 'sine', 0.1, 0.2);
+      setTimeout(() => playBeep(1318.51, 'sine', 0.25, 0.2), 100);
+    }
+    function soundWin() {
+      [523, 659, 784, 1046].forEach((f, i) => {
+        setTimeout(() => playBeep(f, 'square', 0.15, 0.2), i * 120);
+      });
+    }
+    function soundChest() {
+      [300, 450, 600, 900, 1200].forEach((f, i) => {
+        setTimeout(() => playBeep(f, 'triangle', 0.1, 0.2), i * 80);
+      });
+    }
+
+    // Game State
+    let coins = parseInt(localStorage.getItem('tb_coins') || '5200', 10);
+    let currentWager = 100;
+    let isSpinning = false;
+    let isGachaRolling = false;
+    let isReady = false;
+    const inventory = JSON.parse(localStorage.getItem('tb_inv') || '[]');
+
+    const symbols = [
+      { id: 'seven', label: '7', glyph: '7', payout: 25 },
+      { id: 'diamond', label: '◆', glyph: '◆', payout: 15 },
+      { id: 'bar', label: 'BAR', glyph: '▰', payout: 10 },
+      { id: 'bell', label: '🔔', glyph: '🔔', payout: 8 },
+      { id: 'cherry', label: '🍒', glyph: '🍒', payout: 6 },
+      { id: 'lemon', label: '🍋', glyph: '🍋', payout: 4 }
+    ];
+
+    const rewardsPool = [
+      { name: "Golden Jackpot Trophy", rarity: "SSR", value: 1200 },
+      { name: "Ruby King Crown", rarity: "SSR", value: 1000 },
+      { name: "Lucky Neon Star", rarity: "SR", value: 500 },
+      { name: "Cherry Charm Ring", rarity: "SR", value: 350 },
+      { name: "Pocket Arcade Bell", rarity: "R", value: 180 },
+      { name: "Retro Pixel Token", rarity: "R", value: 120 }
+    ];
+
+    function updateCoinsDisplay() {
+      document.getElementById('player-coins').textContent = coins.toLocaleString() + ' C';
+      localStorage.setItem('tb_coins', coins.toString());
+    }
+    updateCoinsDisplay();
+
+    function setWager(val) {
+      if (isSpinning) return;
+      currentWager = val;
+      document.querySelectorAll('.wager-btn').forEach(b => {
+        b.classList.toggle('active', parseInt(b.textContent, 10) === val);
+      });
+      playBeep(600, 'square', 0.04, 0.1);
+    }
+
+    // Slot Spin Mechanism
+    function spinSlot() {
+      if (isSpinning) return;
+      if (coins < currentWager) {
+        showNotify("SALDO TIDAK CUKUP!", "Kumpulkan koin atau reset saldo.");
+        playBeep(200, 'sawtooth', 0.2, 0.3);
+        return;
+      }
+
+      coins -= currentWager;
+      updateCoinsDisplay();
+      isSpinning = true;
+      document.getElementById('btn-push').disabled = true;
+      document.getElementById('slot-result').textContent = "SPINNING...";
+      playBeep(400, 'square', 0.08, 0.2);
+
+      const targetSymbols = [
+        symbols[Math.floor(Math.random() * symbols.length)],
+        symbols[Math.floor(Math.random() * symbols.length)],
+        symbols[Math.floor(Math.random() * symbols.length)]
+      ];
+
+      // Reel animation
+      let count = 0;
+      const spinInterval = setInterval(() => {
+        count++;
+        playBeep(300 + (count % 4) * 60, 'square', 0.03, 0.08);
+        for (let i = 0; i < 3; i++) {
+          const rand = symbols[Math.floor(Math.random() * symbols.length)];
+          document.querySelector(`#reel-${i} .reel-symbol`).textContent = rand.glyph;
+        }
+        if (count > 15) {
+          clearInterval(spinInterval);
+          stopReels(targetSymbols);
+        }
+      }, 70);
+    }
+
+    function stopReels(targets) {
+      targets.forEach((sym, i) => {
+        setTimeout(() => {
+          document.querySelector(`#reel-${i} .reel-symbol`).textContent = sym.glyph;
+          playBeep(700, 'triangle', 0.08, 0.2);
+          if (i === 2) finalizeSpin(targets);
+        }, (i + 1) * 350);
+      });
+    }
+
+    function finalizeSpin(targets) {
+      isSpinning = false;
+      document.getElementById('btn-push').disabled = false;
+      const [r1, r2, r3] = targets;
+
+      if (r1.id === r2.id && r2.id === r3.id) {
+        const winAmount = currentWager * r1.payout;
+        coins += winAmount;
+        updateCoinsDisplay();
+        soundWin();
+        document.getElementById('slot-result').innerHTML = 
+          `<span style="color:#ff0055;" class="px">JACKPOT! ${r1.glyph} ${r1.glyph} ${r1.glyph}</span> +${winAmount.toLocaleString()} C!`;
+        showNotify("JACKPOT MENANG!", `+${winAmount.toLocaleString()} C masuk ke saldo!`);
+      } else if (r1.id === r2.id || r2.id === r3.id || r1.id === r3.id) {
+        const winAmount = Math.floor(currentWager * 1.5);
+        coins += winAmount;
+        updateCoinsDisplay();
+        soundCoin();
+        document.getElementById('slot-result').innerHTML = 
+          `<span style="color:var(--gold);">Dua Kembar!</span> +${winAmount.toLocaleString()} C`;
+      } else {
+        document.getElementById('slot-result').textContent = "Belum beruntung, coba lagi!";
+      }
+    }
+
+    // Gacha System
+    function rollGacha(times = 1) {
+      if (isGachaRolling) return;
+      const cost = times === 1 ? 300 : 2700;
+      if (coins < cost) {
+        showNotify("SALDO KURANG!", `Perlu ${cost.toLocaleString()} C untuk Gacha!`);
+        playBeep(200, 'sawtooth', 0.2, 0.3);
+        return;
+      }
+
+      coins -= cost;
+      updateCoinsDisplay();
+      isGachaRolling = true;
+      const chest = document.getElementById('chest-icon');
+      chest.classList.add('shake');
+      soundChest();
+
+      setTimeout(() => {
+        chest.classList.remove('shake');
+        isGachaRolling = false;
+        const pulled = [];
+
+        for (let i = 0; i < times; i++) {
+          const roll = Math.random() * 100;
+          let rarity = "R";
+          if (roll < 3) rarity = "SSR";
+          else if (roll < 18) rarity = "SR";
+
+          const pool = rewardsPool.filter(r => r.rarity === rarity);
+          const picked = pool[Math.floor(Math.random() * pool.length)];
+          pulled.push(picked);
+          inventory.unshift({ ...picked, date: new Date().toLocaleTimeString() });
+        }
+        localStorage.setItem('tb_inv', JSON.stringify(inventory));
+
+        if (times === 1) {
+          const item = pulled[0];
+          document.getElementById('gacha-result').innerHTML = 
+            `Dapat: <span class="rarity-${item.rarity} px">${item.rarity}</span> ${item.name}!`;
+          showNotify(`GACHA ${item.rarity}!`, item.name);
+        } else {
+          document.getElementById('gacha-result').innerHTML = 
+            `Dapat 10 items! Cek di inventory.`;
+          showNotify("GACHA 10x BERHASIL!", "Items tersimpan di inventory.");
+        }
+        soundCoin();
+      }, 1000);
+    }
+
+    // Notification banner
+    let notifyTimer = null;
+    function showNotify(title, desc) {
+      const banner = document.getElementById('banner-notify');
+      document.getElementById('banner-title').textContent = title;
+      document.getElementById('banner-desc').textContent = desc;
+      banner.style.display = 'block';
+      clearTimeout(notifyTimer);
+      notifyTimer = setTimeout(() => { banner.style.display = 'none'; }, 3500);
+    }
+
+    // Command Input
+    const termInput = document.getElementById('term-input');
+    termInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        const cmd = termInput.value.trim().toLowerCase();
+        termInput.value = '';
+        executeCommand(cmd);
+      }
+    });
+
+    function executeCommand(cmd) {
+      if (cmd === '.start') {
+        soundWin();
+        showNotify("C:\> .start BERHASIL!", "Sesi Arcade Aktif! Semua member siap mabar!");
+      } else if (cmd === '.slot') {
+        spinSlot();
+      } else if (cmd === '.gacha') {
+        rollGacha(1);
+      } else if (cmd === '.balance') {
+        showNotify("SALDO COINS", `Saldo saat ini: ${coins.toLocaleString()} C`);
+      } else if (cmd === '.help') {
+        showNotify("PERINTAH ARCADE", ".start | .slot | .gacha | .balance | .clear");
+      } else if (cmd === '.clear') {
+        document.getElementById('slot-result').textContent = "PILIH WAGER & TEKAN PUSH";
+      } else {
+        showNotify("PERINTAH TIDAK DIKENAL", "Ketik .help untuk melihat perintah.");
+        playBeep(220, 'sawtooth', 0.15, 0.2);
+      }
+    }
+
+    // Inventory modal
+    function openInventory() {
+      const list = document.getElementById('inventory-list');
+      if (inventory.length === 0) {
+        list.innerHTML = '<div style="color:var(--mute); text-align:center;">Belum ada item gacha terkumpul.</div>';
+      } else {
+        list.innerHTML = inventory.slice(0, 15).map(item => `
+          <div class="reward-item">
+            <div>
+              <span class="rarity-${item.rarity} px" style="font-size:10px;">[${item.rarity}]</span>
+              <span style="font-size:18px; margin-left:6px;">${item.name}</span>
+            </div>
+            <span style="font-size:14px; color:var(--gold);">${item.value} C</span>
+          </div>
+        `).join('');
+      }
+      document.getElementById('rewards-modal').style.display = 'flex';
+      playBeep(700, 'sine', 0.05, 0.15);
+    }
+    function closeInventory() {
+      document.getElementById('rewards-modal').style.display = 'none';
+    }
+
+    // Ready toggle
+    document.getElementById('btn-ready').addEventListener('click', () => {
+      isReady = !isReady;
+      const btn = document.getElementById('btn-ready');
+      btn.textContent = isReady ? "READY! (CLICK TO UNREADY)" : "TOGGLE READY";
+      btn.style.background = isReady ? "var(--green)" : "var(--gold)";
+      soundCoin();
+    });
+
+    // Spacebar to push
+    window.addEventListener('keydown', (e) => {
+      if (e.code === 'Space' && document.activeElement !== termInput) {
+        e.preventDefault();
+        spinSlot();
+      }
+    });
+  </script>
+</body>
+</html>
