@@ -55,7 +55,19 @@ const menfessManager = require("./src/menfess-manager");
 const economyManager = require('./src/economy-manager');
 const gamesManager = require('./src/games-manager');
 const soundboardManager = require('./src/soundboard-manager');
-const voicePlayer = Number(process.versions.node.split('.')[0]) >= 22 ? require('./src/voice-player') : null;
+let voicePlayer = null;
+try {
+  voicePlayer = require('./src/voice-player');
+} catch (err) {
+  console.error('Gagal memuat voice-player:', err.message);
+}
+
+let musicManager = null;
+try {
+  musicManager = require('./src/music-manager');
+} catch (err) {
+  console.error('Gagal memuat music-manager:', err.message);
+}
 const { makeDiscordSticker, makeSticker, stickerToImage } = require('./src/sticker');
 const { upscaleImage } = require('./src/hd');
 const { makeBratSticker, makeBratVideoSticker } = require('./src/brat');
@@ -702,17 +714,17 @@ async function handleCommand({ message, command, args, rawText }) {
             ].join('\n')
           },
           {
-            name: '🎙️ Audio & Voice Tools',
+            name: '🎙️ Musik & Audio Voice Tools',
             value: [
-              `\`${prefix}play [nama/durasi] [mulai_detik]\` - Streaming audio panjang di VC`,
-              `\`${prefix}savesound <nama> [durasi] [mulai_detik]\` - Simpan audio kustom`,
-              `\`${prefix}listsounds\` - Lihat library audio kustom`,
-              `\`${prefix}stopvc\` - Hentikan audio dan keluarkan bot dari VC`,
-              `\`${prefix}addsound <nama> [detik]\` - Buat klip Soundboard resmi (maks 5 detik)`,
-              `\`${prefix}listsound\` / \`${prefix}delsound <nama>\` - Kelola Soundboard resmi`,
-              `\`${prefix}tts <teks>\` - Ubah teks menjadi suara Google (MP3)`,
-              `\`${prefix}tomp3\` - Reply video untuk diekstrak jadi audio MP3`,
-              `\`${prefix}bass\`, \`${prefix}slow\`, \`${prefix}robot\` - Efek audio`
+              `\`${prefix}music <judul/link>\` - Putar musik (Spotify, SoundCloud, Apple Music)`,
+              `\`${prefix}skip\` / \`${prefix}stop\` - Lewati lagu / Matikan musik & keluar VC`,
+              `\`${prefix}pause\` / \`${prefix}resume\` - Jeda atau lanjutkan musik`,
+              `\`${prefix}queue\` / \`${prefix}np\` - Cek antrian lagu & info lagu sekarang`,
+              `\`${prefix}vol <1-150>\` - Atur volume suara musik`,
+              `\`${prefix}addsound <nama>\` - Buat klip Soundboard resmi (maks 5 detik)`,
+              `\`${prefix}listsound\` / \`${prefix}delsound\` - Kelola Soundboard server`,
+              `\`${prefix}tts <teks>\` - Ubah teks jadi suara Google (MP3)`,
+              `\`${prefix}bass\`, \`${prefix}slow\`, \`${prefix}robot\` - Efek filter audio`
             ].join('\n')
           },
           {
@@ -1556,85 +1568,328 @@ async function handleCommand({ message, command, args, rawText }) {
       break;
     }
 
-    // --- CUSTOM AUDIO STREAMING / VOICE CHANNEL ---
+    // --- MUSIC & AUDIO STREAMING SYSTEM ---
+    case 'music':
     case 'play':
+    case 'p':
+    case 'lagu':
+    case 'musik':
+    case 'puter':
     case 'playsound':
     case 'sbplay':
     case 'playvc':
     case 'putarsound': {
-      if (!voicePlayer) {
-        await message.reply({ content: '⚠️ Streaming audio panjang memerlukan Node.js 22.12 atau lebih baru. Pilih runtime Node 22 di panel hosting, lalu restart bot.' });
-        break;
-      }
       if (!message.guild) {
-        await message.reply({ content: '❌ Perintah pemutar audio hanya bisa digunakan di dalam server Discord.' });
+        await message.reply({ content: '❌ Perintah musik hanya bisa digunakan di dalam server Discord.' });
         break;
       }
 
       const voiceChannel = message.member?.voice?.channel;
       if (!voiceChannel) {
-        const text = '⚠️ Kamu harus masuk ke Voice Channel terlebih dahulu.';
+        const text = '⚠️ Kamu harus masuk ke **Voice Channel** terlebih dahulu untuk memutar musik.';
         await message.reply({ content: text });
         replyTextOutput = text;
         break;
       }
 
-      const query = args[0] || '';
-      const secondArg = args[1];
-      const thirdArg = args[2];
-      let sound = query ? voicePlayer.getCustomSound(query) : null;
-      if (!sound && query && isNaN(parseFloat(query)) && !message.attachments?.size && !message.reference) {
-        try {
-          const botToken = client.token || process.env.DISCORD_TOKEN;
-          const nativeSounds = await soundboardManager.listSoundboardSounds(botToken, message.guild.id);
-          const nativeTarget = nativeSounds.find(s => s.sound_id === query || s.name.toLowerCase() === query.toLowerCase());
-          if (nativeTarget) {
-            await soundboardManager.playSoundboardInVoice(botToken, voiceChannel.id, nativeTarget.sound_id);
-            await message.reply({ content: `🔊 Memutar Soundboard resmi **${nativeTarget.name}** di <#${voiceChannel.id}>.` });
-            break;
-          }
-        } catch (err) {
-          console.error('Native Soundboard lookup failed:', err.message);
-        }
-      }
-      let media = null;
-      let durationSec = null;
-      let startSec = 0;
-
-      if (sound) {
-        durationSec = secondArg && !isNaN(parseFloat(secondArg)) ? parseFloat(secondArg) : null;
-        startSec = thirdArg && !isNaN(parseFloat(thirdArg)) ? parseFloat(thirdArg) : 0;
-      } else {
-        media = await getMediaBuffer(message, args);
-        if (!media || !media.buffer) {
-          const text = `⚠️ Audio tidak ditemukan. Upload atau reply file audio, atau gunakan \`${prefix}listsounds\` untuk melihat library.`;
-          await message.reply({ content: text });
-          break;
-        }
-        durationSec = query && !isNaN(parseFloat(query)) ? parseFloat(query) : null;
-        startSec = secondArg && !isNaN(parseFloat(secondArg)) ? parseFloat(secondArg) : 0;
-      }
-
-      if (durationSec && (durationSec < 1 || durationSec > 600)) {
-        await message.reply({ content: '❌ Durasi harus antara 1 dan 600 detik (10 menit).' });
+      if (!musicManager && !voicePlayer) {
+        await message.reply({ content: '❌ Modul audio Discord belum siap atau sedang diinisialisasi. Coba sesaat lagi.' });
         break;
       }
 
-      const waitMsg = await message.reply({ content: `⏳ Menghubungkan ke <#${voiceChannel.id}> dan menyiapkan audio...` });
-      try {
-        const audioSource = sound ? sound.filePath : media.buffer;
-        await voicePlayer.playAudioInVoice({
-          voiceChannel,
-          audioSource,
-          options: { startSec, durationSec }
-        });
-        const displayName = sound ? `**${sound.name}**` : (media.name || 'audio');
-        await waitMsg.edit({ content: `🔊 Memutar ${displayName} di <#${voiceChannel.id}>${durationSec ? ` selama **${voicePlayer.formatTime(durationSec)}**` : ''}. Bot akan keluar setelah 2 menit idle.` });
-        replyTextOutput = `[Memutar ${displayName} di voice channel]`;
-      } catch (err) {
-        console.error('Error play VC audio:', err);
-        await waitMsg.edit({ content: `❌ Gagal memutar audio: ${err.message}` });
+      const fullQuery = args.join(' ').trim();
+      const media = await getMediaBuffer(message, args);
+
+      // Jika ada nama soundboard native / kustom spesifik dari command playsound/sbplay
+      if ((command === 'playsound' || command === 'sbplay') && fullQuery && voicePlayer) {
+        const sound = voicePlayer.getCustomSound(fullQuery);
+        if (sound) {
+          const waitMsg = await message.reply({ content: `⏳ Memutar sound **${sound.name}** di <#${voiceChannel.id}>...` });
+          try {
+            await voicePlayer.playAudioInVoice({
+              voiceChannel,
+              audioSource: sound.filePath,
+              options: {}
+            });
+            await waitMsg.edit({ content: `🔊 Memutar sound **${sound.name}** di <#${voiceChannel.id}>.` });
+          } catch (err) {
+            await waitMsg.edit({ content: `❌ Gagal: ${err.message}` });
+          }
+          break;
+        }
       }
+
+      if (!fullQuery && (!media || !media.buffer)) {
+        const helpEmbed = new EmbedBuilder()
+          .setColor('#5865F2')
+          .setTitle('🎵 TuffBot Music Player')
+          .setDescription([
+            'Putar musik favoritmu langsung di Voice Channel dari berbagai platform!',
+            '',
+            '📌 **Format Penggunaan:**',
+            `• \`${prefix}music <judul lagu>\` (contoh: \`${prefix}music Laskar Pelangi\`)`,
+            `• \`${prefix}music <link spotify>\` (track / single)`,
+            `• \`${prefix}music <link soundcloud>\``,
+            `• \`${prefix}music <link apple music>\``,
+            `• \`${prefix}music <link audio langsung .mp3/.m4a>\``,
+            `• Upload/reply file MP3 lalu ketik \`${prefix}music\``,
+            '',
+            '🎮 **Kontrol Musik:**',
+            `• \`${prefix}skip\` - Lewati lagu yang sedang diputar`,
+            `• \`${prefix}pause\` / \`${prefix}resume\` - Jeda / Lanjutkan musik`,
+            `• \`${prefix}queue\` / \`${prefix}q\` - Cek antrian lagu`,
+            `• \`${prefix}np\` - Info lagu yang sedang diputar & progress bar`,
+            `• \`${prefix}vol <1-150>\` - Ubah volume`,
+            `• \`${prefix}stop\` - Hentikan musik, hapus antrian & keluar VC`
+          ].join('\n'))
+          .setFooter({ text: 'Mendukung Spotify, SoundCloud, Apple Music & Direct Audio' });
+        await message.reply({ embeds: [helpEmbed] });
+        break;
+      }
+
+      const waitMsg = await message.reply({
+        content: `🔎 Mencari lagu: **${fullQuery || media.name || 'audio'}**...`
+      });
+
+      try {
+        const res = await musicManager.playMusic({
+          guild: message.guild,
+          textChannel: message.channel,
+          voiceChannel,
+          query: fullQuery,
+          requestedBy: message.author.displayName || message.author.username,
+          customBuffer: media?.buffer || null,
+          customFileName: media?.name || ''
+        });
+
+        if (res.queued) {
+          const embed = new EmbedBuilder()
+            .setColor('#5865F2')
+            .setTitle('📥 Ditambahkan ke Antrian')
+            .setDescription(`[**${res.track.title}**](${res.track.url || 'https://discord.com'})\nArtis: **${res.track.artist}**`)
+            .addFields(
+              { name: '⏱️ Durasi', value: `\`${res.track.durationText}\``, inline: true },
+              { name: '🔢 Posisi Antrian', value: `#${res.position}`, inline: true },
+              { name: '🌐 Sumber', value: `${res.track.source}`, inline: true }
+            )
+            .setFooter({ text: `Diminta oleh ${res.track.requestedBy}` });
+          if (res.track.thumbnail) embed.setThumbnail(res.track.thumbnail);
+          await waitMsg.edit({ content: null, embeds: [embed] });
+          replyTextOutput = `[Ditambahkan ke antrian #${res.position}: ${res.track.title}]`;
+        } else {
+          const embed = new EmbedBuilder()
+            .setColor('#5865F2')
+            .setTitle('🎶 Memutar Musik')
+            .setDescription(`[**${res.track.title}**](${res.track.url || 'https://discord.com'})\nArtis: **${res.track.artist}**\n\n🔊 Terhubung ke <#${voiceChannel.id}>`)
+            .addFields(
+              { name: '⏱️ Durasi', value: `\`${res.track.durationText}\``, inline: true },
+              { name: '🌐 Sumber', value: `${res.track.source}`, inline: true },
+              { name: '👤 Peminta', value: `${res.track.requestedBy}`, inline: true }
+            )
+            .setFooter({ text: `Ketik ${prefix}queue untuk cek antrian • ${prefix}stop untuk berhenti` });
+          if (res.track.thumbnail) embed.setThumbnail(res.track.thumbnail);
+          await waitMsg.edit({ content: null, embeds: [embed] });
+          replyTextOutput = `[Memutar musik: ${res.track.title}]`;
+        }
+      } catch (err) {
+        console.error('Error play music:', err);
+        await waitMsg.edit({ content: `❌ Gagal memutar musik: ${err.message}` });
+      }
+      break;
+    }
+
+    case 'skip':
+    case 'next':
+    case 'lewati': {
+      if (!message.guild) {
+        await message.reply({ content: '❌ Perintah ini hanya bisa digunakan di server Discord.' });
+        break;
+      }
+      if (!musicManager) {
+        await message.reply({ content: '❌ Modul pemutar musik tidak aktif.' });
+        break;
+      }
+      const skipped = musicManager.skipMusic(message.guild.id);
+      if (skipped) {
+        await message.reply({ content: `⏭️ Lagu **${skipped.title}** dilewati!` });
+        replyTextOutput = `[Lagu ${skipped.title} dilewati]`;
+      } else {
+        await message.reply({ content: '❌ Tidak ada lagu yang sedang diputar untuk dilewati.' });
+      }
+      break;
+    }
+
+    case 'pause':
+    case 'jeda': {
+      if (!message.guild) {
+        await message.reply({ content: '❌ Perintah ini hanya bisa digunakan di server Discord.' });
+        break;
+      }
+      if (!musicManager) {
+        await message.reply({ content: '❌ Modul pemutar musik tidak aktif.' });
+        break;
+      }
+      const ok = musicManager.pauseMusic(message.guild.id);
+      if (ok) {
+        await message.reply({ content: `⏸️ Musik dijeda! Ketik \`${prefix}resume\` untuk melanjutkan.` });
+      } else {
+        await message.reply({ content: '❌ Musik tidak sedang diputar atau sudah dijeda.' });
+      }
+      break;
+    }
+
+    case 'resume':
+    case 'lanjut':
+    case 'unpause': {
+      if (!message.guild) {
+        await message.reply({ content: '❌ Perintah ini hanya bisa digunakan di server Discord.' });
+        break;
+      }
+      if (!musicManager) {
+        await message.reply({ content: '❌ Modul pemutar musik tidak aktif.' });
+        break;
+      }
+      const ok = musicManager.resumeMusic(message.guild.id);
+      if (ok) {
+        await message.reply({ content: '▶️ Pemutaran musik dilanjutkan!' });
+      } else {
+        await message.reply({ content: '❌ Musik tidak sedang dalam kondisi jeda.' });
+      }
+      break;
+    }
+
+    case 'queue':
+    case 'q':
+    case 'antrian': {
+      if (!message.guild) {
+        await message.reply({ content: '❌ Perintah ini hanya bisa digunakan di server Discord.' });
+        break;
+      }
+      if (!musicManager) {
+        await message.reply({ content: '❌ Modul pemutar musik tidak aktif.' });
+        break;
+      }
+      const q = musicManager.getQueueList(message.guild.id);
+      if (!q || (!q.current && q.queue.length === 0)) {
+        await message.reply({ content: '📭 Antrian musik server ini masih kosong.' });
+        break;
+      }
+
+      let desc = '';
+      if (q.current) {
+        desc += `▶️ **Sedang Memutar:**\n[**${q.current.title}**](${q.current.url || 'https://discord.com'}) - **${q.current.artist}** (\`${q.current.durationText}\`)\nDiminta oleh: **${q.current.requestedBy}**\n\n`;
+      }
+
+      if (q.queue.length > 0) {
+        desc += `**Lagu Berikutnya (${q.queue.length} lagu):**\n`;
+        const listItems = q.queue.slice(0, 10).map((t, idx) => {
+          return `**${idx + 1}.** [${t.title}](${t.url || 'https://discord.com'}) - **${t.artist}** (\`${t.durationText}\`) [${t.requestedBy}]`;
+        });
+        desc += listItems.join('\n');
+        if (q.queue.length > 10) {
+          desc += `\n*...dan ${q.queue.length - 10} lagu lainnya.*`;
+        }
+      } else {
+        desc += '*Tidak ada lagu berikutnya dalam antrian.*';
+      }
+
+      const embed = new EmbedBuilder()
+        .setColor('#5865F2')
+        .setTitle(`📜 Antrian Musik — ${message.guild.name}`)
+        .setDescription(desc.slice(0, 4000))
+        .setFooter({ text: `Total: ${q.totalCount} lagu • Status: ${q.isPaused ? 'Dijeda' : 'Memutar'} • Volume: ${q.volume}%` });
+
+      await message.reply({ embeds: [embed] });
+      break;
+    }
+
+    case 'nowplaying':
+    case 'np':
+    case 'laguini': {
+      if (!message.guild) {
+        await message.reply({ content: '❌ Perintah ini hanya bisa digunakan di server Discord.' });
+        break;
+      }
+      if (!musicManager) {
+        await message.reply({ content: '❌ Modul pemutar musik tidak aktif.' });
+        break;
+      }
+      const np = musicManager.getNowPlaying(message.guild.id);
+      if (!np) {
+        await message.reply({ content: '❌ Tidak ada lagu yang sedang diputar saat ini.' });
+        break;
+      }
+
+      const embed = new EmbedBuilder()
+        .setColor('#5865F2')
+        .setTitle('🎶 Now Playing')
+        .setDescription([
+          `[**${np.track.title}**](${np.track.url || 'https://discord.com'})`,
+          `Artis: **${np.track.artist}**`,
+          '',
+          `\`${np.progressBar}\` \`${np.elapsedText} / ${np.totalText}\``,
+          '',
+          `Status: **${np.isPaused ? '⏸️ Dijeda' : '▶️ Memutar'}** • Volume: \`${np.volume}%\``,
+          `Sumber: **${np.track.source}** • Diminta oleh: **${np.track.requestedBy}**`
+        ].join('\n'))
+        .setFooter({ text: `Sisa antrian: ${np.queueCount} lagu` });
+      if (np.track.thumbnail) embed.setThumbnail(np.track.thumbnail);
+
+      await message.reply({ embeds: [embed] });
+      break;
+    }
+
+    case 'vol':
+    case 'volume': {
+      if (!message.guild) {
+        await message.reply({ content: '❌ Perintah ini hanya bisa digunakan di server Discord.' });
+        break;
+      }
+      if (!musicManager) {
+        await message.reply({ content: '❌ Modul pemutar musik tidak aktif.' });
+        break;
+      }
+      const voiceChannel = message.member?.voice?.channel;
+      if (!voiceChannel) {
+        await message.reply({ content: '⚠️ Kamu harus berada di Voice Channel untuk mengatur volume musik.' });
+        break;
+      }
+      if (!args[0]) {
+        const np = musicManager.getNowPlaying(message.guild.id);
+        const curVol = np ? np.volume : 100;
+        await message.reply({ content: `🔊 Volume musik saat ini: **${curVol}%**. Gunakan \`${prefix}vol <1-150>\` untuk mengubah.` });
+        break;
+      }
+      const newVol = musicManager.setMusicVolume(message.guild.id, args[0]);
+      await message.reply({ content: `🔊 Volume musik berhasil disetel ke **${newVol}%**.` });
+      break;
+    }
+
+    case 'stop':
+    case 'berhenti':
+    case 'stopvc':
+    case 'leavevc':
+    case 'leave':
+    case 'dc':
+    case 'disconnect': {
+      if (!message.guild) {
+        await message.reply({ content: '❌ Perintah hanya bisa digunakan di server Discord.' });
+        break;
+      }
+      let stoppedMusic = false;
+      if (musicManager) {
+        stoppedMusic = musicManager.stopMusic(message.guild.id);
+      }
+      let stoppedVoice = false;
+      if (voicePlayer) {
+        stoppedVoice = voicePlayer.stopAudio(message.guild.id) || voicePlayer.leaveVoice(message.guild.id);
+      }
+
+      const text = stoppedMusic || stoppedVoice
+        ? '⏹️ Pemutaran musik dihentikan, antrian dibersihkan, dan bot keluar dari Voice Channel.'
+        : 'ℹ️ Bot tidak sedang memutar musik atau berada di Voice Channel.';
+      await message.reply({ content: text });
+      replyTextOutput = text;
       break;
     }
 
@@ -1643,6 +1898,10 @@ async function handleCommand({ message, command, args, rawText }) {
     case 'simpan_audio': {
       if (!message.guild) {
         await message.reply({ content: '❌ Perintah hanya bisa digunakan di server Discord.' });
+        break;
+      }
+      if (!voicePlayer) {
+        await message.reply({ content: '⚠️ Fitur ini membutuhkan modul voice aktif.' });
         break;
       }
       const name = args[0];
@@ -1658,49 +1917,41 @@ async function handleCommand({ message, command, args, rawText }) {
       }
       const media = await getMediaBuffer(message, args.slice(3));
       if (!media || !media.buffer) {
-        await message.reply({ content: '❌ Lampirkan atau reply file audio untuk disimpan.' });
+        await message.reply({ content: `⚠️ Lampirkan atau reply file audio untuk disimpan sebagai sound kustom.` });
         break;
       }
-      const waitMsg = await message.reply({ content: `⏳ Menyimpan **${name}**...` });
       try {
         const saved = voicePlayer.saveCustomSound({ name, audioBuffer: media.buffer, startSec, durationSec });
-        await waitMsg.edit({ content: `✅ **${saved.name}** tersimpan (${saved.durationText}, ${saved.sizeKb} KB). Putar dengan \`${prefix}play ${saved.name}\`.` });
-        replyTextOutput = `[Audio ${saved.name} disimpan]`;
+        await message.reply({ content: `✅ Berhasil menyimpan audio **${saved.name}** (${saved.durationText}, ${saved.sizeKb} KB). Putar dengan \`${prefix}play ${saved.name}\`.` });
       } catch (err) {
-        await waitMsg.edit({ content: `❌ Gagal menyimpan audio: ${err.message}` });
+        await message.reply({ content: `❌ Gagal menyimpan audio: ${err.message}` });
       }
       break;
     }
 
     case 'listsounds':
-    case 'listcustomsounds': {
+    case 'audios':
+    case 'customsounds': {
+      if (!message.guild) {
+        await message.reply({ content: '❌ Perintah hanya bisa digunakan di server Discord.' });
+        break;
+      }
+      if (!voicePlayer) {
+        await message.reply({ content: '⚠️ Fitur ini membutuhkan modul voice aktif.' });
+        break;
+      }
       const sounds = voicePlayer.listCustomSounds();
-      if (!sounds.length) {
-        await message.reply({ content: `📂 Library audio kustom kosong. Reply atau lampirkan audio dengan \`${prefix}savesound <nama> [durasi]\`.` });
+      if (!sounds || sounds.length === 0) {
+        await message.reply({ content: `📂 Belum ada audio kustom. Simpan dengan \`${prefix}savesound <nama>\`.` });
         break;
       }
       const lines = sounds.map((s, idx) => `**${idx + 1}.** \`${s.name}\` — ${s.durationText} (${s.sizeKb} KB)`);
       const embed = new EmbedBuilder()
         .setColor('#5865F2')
         .setTitle('🎵 Library Audio Kustom')
-        .setDescription(lines.join('\\n').slice(0, 4000))
+        .setDescription(lines.join('\n').slice(0, 4000))
         .setFooter({ text: `Gunakan ${prefix}play <nama> • Maksimum 10 menit` });
       await message.reply({ embeds: [embed] });
-      break;
-    }
-
-    case 'stopvc':
-    case 'leavevc':
-    case 'stopaudio': {
-      if (!message.guild) {
-        await message.reply({ content: '❌ Perintah hanya bisa digunakan di server Discord.' });
-        break;
-      }
-      const stopped = voicePlayer.stopAudio(message.guild.id);
-      const left = voicePlayer.leaveVoice(message.guild.id);
-      const text = stopped || left ? '⏹️ Audio dihentikan dan bot keluar dari Voice Channel.' : 'ℹ️ Bot tidak sedang memutar audio atau berada di Voice Channel.';
-      await message.reply({ content: text });
-      replyTextOutput = text;
       break;
     }
 
