@@ -7,7 +7,10 @@ const {
   AttachmentBuilder, 
   ActivityType,
   PermissionsBitField,
-  Events
+  Events,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle
 } = require('discord.js');
 const http = require('http');
 const fs = require('fs');
@@ -31,6 +34,8 @@ if (fs.existsSync(require("path").join(__dirname, "voice_modules.tar.gz"))) {
 const path = require('path');
 const axios = require('axios');
 const config = require('./config');
+const unoManager = require('./src/uno-manager');
+const { startUnoServer } = require('./src/uno-server');
 
 // Import modular features
 const { 
@@ -3988,6 +3993,101 @@ case 'daily':
         )
         .setTimestamp();
       await message.reply({ embeds: [embed] });
+      break;
+    }
+
+        // --- GAME UNO MULTIPLAYER WEB ---
+    case 'setunourl':
+    case 'setweburl': {
+      if (!message.guild) return message.reply('⚠️ Perintah ini hanya bisa digunakan di server!');
+      const newUrl = (args[0] || '').trim();
+      if (!newUrl || !newUrl.startsWith('http')) {
+        return message.reply(`⚠️ Masukkan URL lengkap termasuk https://! Contoh: \`${prefix}setunourl https://namabot.apps.bot-hosting.cloud\``);
+      }
+      try {
+        const urlFile = path.join(__dirname, 'data', 'web-url.json');
+        if (!fs.existsSync(path.join(__dirname, 'data'))) fs.mkdirSync(path.join(__dirname, 'data'), { recursive: true });
+        fs.writeFileSync(urlFile, JSON.stringify({ url: newUrl.replace(/\/+$/, '') }), 'utf-8');
+        await message.reply(`✅ URL Web UNO berhasil disetel ke: **${newUrl}**`);
+      } catch (err) {
+        await message.reply(`❌ Gagal menyimpan URL: ${err.message}`);
+      }
+      break;
+    }
+
+    case 'uno': {
+      if (!message.guild) return message.reply('⚠️ Game UNO hanya bisa dimainkan di dalam server Discord!');
+
+      // Dapatkan base web url
+      let baseUrl = process.env.WEB_URL || process.env.APP_URL || '';
+      try {
+        const urlFile = path.join(__dirname, 'data', 'web-url.json');
+        if (fs.existsSync(urlFile)) {
+          const parsed = JSON.parse(fs.readFileSync(urlFile, 'utf-8'));
+          if (parsed && parsed.url) baseUrl = parsed.url;
+        }
+      } catch (_) {}
+
+      const webPort = parseInt(process.env.SERVER_PORT || process.env.PORT || 3000, 10);
+      if (!baseUrl) {
+        baseUrl = `http://localhost:${webPort}`;
+      }
+
+      const roomId = `UNO-${message.channel.id.slice(-6)}`;
+      const author = message.author;
+      const avatarUrl = author.displayAvatarURL({ extension: 'png' });
+      const displayName = author.displayName || author.username;
+
+      let room = unoManager.getRoom(roomId);
+      if (!room || room.status === 'finished') {
+        room = unoManager.getOrCreateRoom(roomId, author.id, displayName, avatarUrl);
+      } else {
+        // Gabung jika belum ada
+        if (!room.players.some(p => p.id === author.id) && room.status === 'waiting') {
+          room.addPlayer(author.id, displayName, avatarUrl);
+        }
+      }
+
+      const gameUrl = `${baseUrl}/uno?room=${encodeURIComponent(roomId)}&user=${author.id}&name=${encodeURIComponent(displayName)}&avatar=${encodeURIComponent(avatarUrl)}`;
+
+      const playerListText = room.players.map((p, i) => `**${i+1}.** ${p.name} ${p.id === room.hostId ? '👑 *(Host)*' : ''}`).join('\n');
+
+      const unoEmbed = new EmbedBuilder()
+        .setColor(0xEF4444)
+        .setTitle('🎴 UNO! Multiplayer Online Table (Maks 8 Pemain)')
+        .setDescription(
+          `Selamat datang di Meja Game UNO! Bermain kartu UNO seru bersama teman-teman secara live di browser dengan sinkronisasi instan.\n\n` +
+          `👑 **Host:** <@${room.hostId}>\n` +
+          `📊 **Status:** ${room.status === 'playing' ? '🟢 Sedang Berjalan' : '🟡 Menunggu Pemain (Maks 8)'}\n` +
+          `👥 **Pemain Terdaftar (${room.players.length}/8):**\n${playerListText}\n\n` +
+          `🔗 **Link Meja Web:** [Klik Disini untuk Buka Meja UNO](${gameUrl})\n` +
+          `*(Atau klik tombol **🎮 Buka Meja Game** di bawah ini)*`
+        )
+        .setFooter({ text: `Ketik ${prefix}setunourl <url> untuk mengubah domain hosting web jika diperlukan.` })
+        .setTimestamp();
+
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setLabel('🎮 Buka Meja Game')
+          .setStyle(ButtonStyle.Link)
+          .setURL(gameUrl),
+        new ButtonBuilder()
+          .setCustomId(`uno_join_${roomId}`)
+          .setLabel('➕ Gabung Room')
+          .setStyle(ButtonStyle.Primary)
+          .setDisabled(room.status !== 'waiting' || room.players.length >= 8),
+        new ButtonBuilder()
+          .setCustomId(`uno_start_${roomId}`)
+          .setLabel('🚀 Mulai Game')
+          .setStyle(ButtonStyle.Success)
+          .setDisabled(room.status !== 'waiting' || room.players.length < 2),
+        new ButtonBuilder()
+          .setCustomId(`uno_leave_${roomId}`)
+          .setLabel('❌ Keluar')
+          .setStyle(ButtonStyle.Danger)
+      );
+
+      await message.reply({ embeds: [unoEmbed], components: [row] });
       break;
     }
 
