@@ -4052,6 +4052,11 @@ case 'daily':
 
       const playerListText = room.players.map((p, i) => `**${i+1}.** ${p.name} ${p.id === room.hostId ? '👑 *(Host)*' : ''}`).join('\n');
 
+      let domainNotice = '';
+      if (!baseUrl || baseUrl.includes('localhost')) {
+        domainNotice = `\n\n💡 **Tips Web Hosting:** Agar teman bisa buka web ini dari HP/laptop mereka, aktifkan domain gratis di tab **Domains** panel bot-hosting.net (contoh: \`https://namabot.apps.bot-hosting.cloud\`), lalu ketik: \`${prefix}setunourl https://namabot.apps.bot-hosting.cloud\``;
+      }
+
       const unoEmbed = new EmbedBuilder()
         .setColor(0xEF4444)
         .setTitle('🎴 UNO! Multiplayer Online Table (Maks 8 Pemain)')
@@ -4061,7 +4066,7 @@ case 'daily':
           `📊 **Status:** ${room.status === 'playing' ? '🟢 Sedang Berjalan' : '🟡 Menunggu Pemain (Maks 8)'}\n` +
           `👥 **Pemain Terdaftar (${room.players.length}/8):**\n${playerListText}\n\n` +
           `🔗 **Link Meja Web:** [Klik Disini untuk Buka Meja UNO](${gameUrl})\n` +
-          `*(Atau klik tombol **🎮 Buka Meja Game** di bawah ini)*`
+          `*(Atau klik tombol **🎮 Buka Meja Game** di bawah ini)*` + domainNotice
         )
         .setFooter({ text: `Ketik ${prefix}setunourl <url> untuk mengubah domain hosting web jika diperlukan.` })
         .setTimestamp();
@@ -4231,116 +4236,8 @@ client.once(Events.ClientReady, async () => {
     type: ActivityType.Playing
   });
 
-  startIpcServer();
+  startUnoServer(client, handleCommand);
 });
-
-// HTTP IPC Server untuk pengiriman dari console (send.js)
-function startIpcServer() {
-  const server = http.createServer(async (req, res) => {
-    if (req.method === 'POST' && req.url === '/send') {
-      let body = '';
-      req.on('data', chunk => body += chunk);
-      req.on('end', async () => {
-        try {
-          const { target, message: textToSend } = JSON.parse(body);
-          if (!textToSend) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ success: false, error: 'Pesan kosong' }));
-          }
-
-          // Cari channel Discord yang dituju
-          let targetChannel = null;
-          if (target && target !== 'default' && target !== 'channel') {
-            try {
-              targetChannel = await client.channels.fetch(target);
-            } catch (_) {}
-          }
-
-          // Jika target default atau tidak ditemukan, pilih text channel pertama yang bisa diakses
-          if (!targetChannel) {
-            for (const guild of client.guilds.cache.values()) {
-              const ch = guild.channels.cache.find(c => c.isTextBased() && c.viewable);
-              if (ch) {
-                targetChannel = ch;
-                break;
-              }
-            }
-          }
-
-          if (!targetChannel) {
-            res.writeHead(404, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ 
-              success: false, 
-              error: 'Tidak ada channel Discord yang dapat diakses oleh bot saat ini.' 
-            }));
-          }
-
-          const prefix = config.prefix || '.';
-          const isCommand = textToSend.startsWith(prefix);
-
-          if (isCommand) {
-            const [cmdRaw, ...args] = textToSend.slice(prefix.length).trim().split(/\s+/);
-            const command = (cmdRaw || '').toLowerCase();
-
-            // Mock message object untuk eksekusi via console
-            let sentDiscordMsg = null;
-            const mockMsg = {
-              author: { id: 'console-owner', username: 'Console', displayName: 'Console Admin' },
-              content: textToSend,
-              createdTimestamp: Date.now(),
-              channel: targetChannel,
-              guild: targetChannel.guild,
-              attachments: new Map(),
-              reply: async (payload) => {
-                sentDiscordMsg = await targetChannel.send(payload);
-                return sentDiscordMsg;
-              }
-            };
-
-            const replyText = await handleCommand({
-              message: mockMsg,
-              command,
-              args,
-              rawText: textToSend
-            });
-
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({
-              success: true,
-              isCommand: true,
-              command: `.${command}`,
-              replyText: replyText || '',
-              channelName: `#${targetChannel.name} (${targetChannel.guild?.name || 'DM'})`
-            }));
-          } else {
-            // Pesan teks biasa ke channel
-            await targetChannel.send(textToSend);
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({
-              success: true,
-              isCommand: false,
-              channelName: `#${targetChannel.name} (${targetChannel.guild?.name || 'DM'})`
-            }));
-          }
-        } catch (err) {
-          res.writeHead(500, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ success: false, error: err.message }));
-        }
-      });
-    } else {
-      res.writeHead(404);
-      res.end('Not Found');
-    }
-  });
-
-  const port = config.ipcPort || 45678;
-  server.listen(port, '127.0.0.1', () => {
-    console.log(`💡 [Console Panel Aktif] Ketik langsung di terminal:`);
-    console.log(`   node send.js default <pesan/command>`);
-    console.log(`   Contoh: node send.js default .menu`);
-    console.log(`           node send.js default .ai siapa itu messi`);
-  });
-}
 
 // Inisialisasi Login Bot Discord
 const botToken = config.token;
