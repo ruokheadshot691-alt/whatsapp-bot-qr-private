@@ -903,7 +903,7 @@ async function handleCommand({ message, command, args, rawText }) {
       const history = getAiHistory(userId);
 
       try {
-        const answer = await askAI(prompt, userId, userPersona, history);
+        const answer = await askAI(prompt, history, userId, userPersona);
         appendAiHistory(userId, 'user', prompt);
         appendAiHistory(userId, 'assistant', answer);
 

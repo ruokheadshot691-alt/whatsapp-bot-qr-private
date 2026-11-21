@@ -20,10 +20,11 @@ function aiSystemPrompt(persona = '') {
 }
 
 async function askUnlimited(prompt, history, persona) {
+  const safeHistory = Array.isArray(history) ? history : [];
   const messages = [
     { role: 'system', content: aiSystemPrompt(persona) },
-    ...history.filter((m) => ['user', 'assistant'].includes(m.role)).map((m) => ({ role: m.role, content: String(m.content) })),
-    { role: 'user', content: prompt }
+    ...safeHistory.filter((m) => m && ['user', 'assistant'].includes(m.role)).map((m) => ({ role: m.role, content: String(m.content || '') })),
+    { role: 'user', content: String(prompt || '') }
   ];
   const res = await fetch('https://app.unlimitedai.chat/api/chat', {
     method: 'POST',
@@ -67,7 +68,36 @@ async function askUnlimited(prompt, history, persona) {
   return reply.trim();
 }
 
+async function askPollinations(prompt, history = [], persona = '') {
+  const safeHistory = Array.isArray(history) ? history : [];
+  const messages = [
+    { role: 'system', content: aiSystemPrompt(persona) },
+    ...safeHistory.filter((m) => m && ['user', 'assistant'].includes(m.role)).map((m) => ({
+      role: m.role,
+      content: String(m.content || '')
+    })),
+    { role: 'user', content: String(prompt || '') }
+  ];
+
+  const res = await fetch('https://text.pollinations.ai/', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      messages,
+      model: 'openai-fast',
+      seed: Math.floor(Math.random() * 1000000)
+    }),
+    signal: AbortSignal.timeout(18000)
+  });
+
+  if (!res.ok) throw new Error(`Pollinations HTTP ${res.status}`);
+  const answer = await res.text();
+  if (!answer || !answer.trim()) throw new Error('Pollinations tidak mengirim jawaban');
+  return answer.trim();
+}
+
 async function askFreeAI(prompt, history, userId, persona) {
+  const safeHistory = Array.isArray(history) ? history : [];
   const sRes = await fetch('https://free-ai-online.com/wp-json/mwai/v1/start_session', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -79,7 +109,7 @@ async function askFreeAI(prompt, history, userId, persona) {
   if (!restNonce) throw new Error('AI cadangan tidak mengirim token sesi');
   const messages = [
     { id: 'system_instruction', role: 'system', content: aiSystemPrompt(persona) },
-    ...history.map((m, idx) => ({ id: m.id || `msg_${idx}`, role: m.role, content: m.content }))
+    ...safeHistory.map((m, idx) => ({ id: m.id || `msg_${idx}`, role: m.role, content: m.content }))
   ];
   const cRes = await fetch('https://free-ai-online.com/wp-json/mwai-ui/v1/chats/submit', {
     method: 'POST',
@@ -98,9 +128,36 @@ async function askFreeAI(prompt, history, userId, persona) {
   return data.reply.trim();
 }
 
-async function askAI(prompt, history = [], userId = 'default', persona = '') {
-  const errors = [];
-  // Engine ini menghormati system prompt, termasuk Bahasa Indonesia dan persona.
+async function askAI(prompt, arg2 = [], arg3 = 'default', arg4 = '') {
+  let history = [];
+  let userId = 'default';
+  let persona = '';
+
+  // Menangani semua gaya pemanggilan:
+  // - askAI(prompt, history, userId, persona)
+  // - askAI(prompt, userId, persona, history)
+  // - askAI(prompt, userId, persona)
+  if (Array.isArray(arg2)) {
+    history = arg2;
+    userId = typeof arg3 === 'string' ? arg3 : 'default';
+    persona = typeof arg4 === 'string' ? arg4 : '';
+  } else if (typeof arg2 === 'string') {
+    userId = arg2;
+    if (typeof arg3 === 'string' && Array.isArray(arg4)) {
+      persona = arg3;
+      history = arg4;
+    } else if (typeof arg3 === 'string') {
+      persona = arg3;
+      history = Array.isArray(arg4) ? arg4 : [];
+    } else if (Array.isArray(arg3)) {
+      history = arg3;
+      persona = typeof arg4 === 'string' ? arg4 : '';
+    }
+  }
+
+  history = Array.isArray(history) ? history : [];
+
+  // Engine 1: UnlimitedAI
   try {
     let answer = await askUnlimited(prompt, history, persona);
     if (looksLikeChinese(answer)) {
@@ -110,29 +167,30 @@ async function askAI(prompt, history = [], userId = 'default', persona = '') {
         persona
       );
     }
-    if (looksLikeChinese(answer)) throw new Error('AI mengirim jawaban dalam bahasa yang tidak sesuai');
-    return answer;
+    if (!looksLikeChinese(answer)) return answer;
   } catch (err) {
-    errors.push(err.message);
-    console.warn('[AI utama gagal, mencoba AI cadangan]:', err.message);
+    console.warn('[AI Utama Unlimited gagal, mencoba cadangan]:', err.message);
   }
 
+  // Engine 2: Pollinations
+  try {
+    const answer = await askPollinations(prompt, history, persona);
+    if (!looksLikeChinese(answer)) return answer;
+  } catch (err) {
+    console.warn('[AI Cadangan Pollinations gagal]:', err.message);
+  }
+
+  // Engine 3: FreeAI
   try {
     const answer = await askFreeAI(prompt, history, userId, persona);
-    if (looksLikeChinese(answer)) throw new Error('AI cadangan mengirim jawaban dalam bahasa yang tidak sesuai');
-    return answer;
+    if (!looksLikeChinese(answer)) return answer;
   } catch (err) {
-    errors.push(err.message);
-    console.warn('[AI cadangan juga gagal]:', err.message);
+    console.warn('[AI Cadangan FreeAI gagal]:', err.message);
   }
-  throw new Error('AI sedang tidak bisa diakses. Coba lagi beberapa saat; cek koneksi dan kuota layanan gratis.');
+
+  throw new Error('Semua layanan AI sedang sibuk. Silakan coba lagi beberapa saat.');
 }
 
-/**
- * Terjemahan: MyMemory terlebih dahulu (pakai autodetect, bukan kode sumber auto),
- * lalu Google Translate GTX. Memeriksa content-type/status agar HTML error tidak
- * berubah menjadi pesan JSON parse yang membingungkan.
- */
 async function translateText(text, targetLang = 'id') {
   const langMap = {
     jp: 'ja', japan: 'ja', jepang: 'ja',
