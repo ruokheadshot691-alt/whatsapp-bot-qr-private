@@ -4131,13 +4131,7 @@ client.once(Events.ClientReady, async () => {
     type: ActivityType.Playing
   });
 
-  try {
-    const { startWebServer } = require('./src/web-server');
-    startWebServer(client, handleCommand);
-  } catch (err) {
-    console.error('⚠️ Gagal menjalankan Web Server terpadu, beralih ke IPC bawaan:', err.message);
-    startIpcServer();
-  }
+  startIpcServer();
 });
 
 // HTTP IPC Server untuk pengiriman dari console (send.js)
